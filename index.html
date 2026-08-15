@@ -658,6 +658,17 @@ function pedDrawFamilyEdges(svg, positions, pairEdges) {
       var damPos = positions[pe0.dam], sirePos = positions[pe0.sire];
       if (!damPos || !sirePos) return;
       trunkX = (damPos.x + sirePos.x) / 2;
+      // The midpoint between dam and sire can coincidentally land exactly on
+      // an unrelated individual's own column in that same rank (their slot
+      // sits exactly between the couple's two slots) — visually that reads
+      // as if the trunk belongs to that unrelated node instead of this
+      // couple. Nudge off it by half a column when that happens.
+      var trunkCollides = Object.keys(positions).some(function(otherId) {
+        if (otherId === pe0.dam || otherId === pe0.sire) return false;
+        var p = positions[otherId];
+        return Math.abs(p.y - damPos.y) < 1 && Math.abs(p.x - trunkX) < 1;
+      });
+      if (trunkCollides) trunkX += (PED_NODE_W + PED_COL_GAP) / 2;
       var barY = Math.max(damPos.y, sirePos.y) + PED_NODE_H / 2 + PED_UNION_GAP;
       vSegs.push({ x: damPos.x, y1: damPos.y + PED_NODE_H / 2, y2: barY, key: key });
       vSegs.push({ x: sirePos.x, y1: sirePos.y + PED_NODE_H / 2, y2: barY, key: key });
@@ -843,6 +854,10 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
   // Descendants first (post-order): leaves get sequential slots, each parent
   // is centered over the span of its own children. This also fixes rootId's
   // own slot, which the ancestor pass below then treats as a given anchor.
+  // Tracks which (rank, slot) pairs are already taken, so the spouse leaves
+  // added below can find a free spot next to their partner without colliding
+  // with an already-placed sibling/leaf at the same rank.
+  var occupied = {};
   var descSeen = {};
   function visitDown(id, depth, r) {
     if (descSeen[id]) return;
@@ -853,12 +868,31 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
     }) : [];
     if (!kids.length) {
       slotX[id] = nextLeaf;
+      occupied[r + '|' + nextLeaf] = true;
       nextLeaf += 1;
       return;
     }
     kids.forEach(function(k) { visitDown(k.id, depth - 1, r + 1); });
     var xs = kids.map(function(k) { return slotX[k.id]; });
     slotX[id] = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
+
+    // Show each kid's OTHER parent too, as a plain leaf beside id (no further
+    // ancestor expansion into their own family) — without this, a child with
+    // two known parents renders as if it only had the one being viewed,
+    // which looks wrong once you notice it.
+    var seenSpouse = {};
+    kids.forEach(function(k) {
+      var other = (k.dam === id) ? k.sire : k.dam;
+      if (!other || !byId[other] || descSeen[other] || seenSpouse[other]) return;
+      seenSpouse[other] = true;
+      var slot = slotX[id] + 1;
+      if (occupied[r + '|' + slot]) slot = slotX[id] - 1;
+      if (occupied[r + '|' + slot]) { slot = nextLeaf; nextLeaf += 1; }
+      rank[other] = r;
+      slotX[other] = slot;
+      occupied[r + '|' + slot] = true;
+      descSeen[other] = true;
+    });
   }
   visitDown(rootId, downDepth, 0);
 
