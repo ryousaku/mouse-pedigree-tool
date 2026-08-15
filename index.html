@@ -612,12 +612,12 @@ function mermaidGoTo(id) {
 const PED_NODE_W = 172;
 const PED_NODE_H = 96;
 const PED_COL_GAP = 60;
-// This is rendered in an SVG on an HTML page — there's no sheet of paper to
-// run out of, so when a rank needs several stacked sibling-bars (a mate with
-// several marriages, each hopping over the others' bars) there's no reason
-// to cram them into a tight band. Generous vertical room turns that into a
-// readable staircase instead of a knot of overlapping arcs.
-const PED_ROW_H = 480;
+// Per-generation gap for the common case — one couple, one plain trunk
+// line, nothing to stack. Busier gaps (a mate with several marriages, each
+// hopping over the others' sibling-bars) get extra room added on top of
+// this by pedComputeRankY, instead of every gap paying for the widest one
+// in the whole diagram.
+const PED_ROW_GAP_BASE = 220;
 const PED_UNION_GAP = 24;
 // Kept clearly larger than a coincidental gap could be mistaken for a broken
 // line: a couple's parent-connector bar and their sibling bar sit only
@@ -928,6 +928,72 @@ function pedArrowDefs(svg) {
   svg.appendChild(defs);
 }
 
+// A single fixed row height sized generously enough for the busiest rank
+// gap in the whole diagram makes every OTHER gap look stretched out for no
+// reason — most gaps are just one couple and a plain trunk line. This
+// works out,
+// for each gap, how many sibling-bar clusters will actually need to stack
+// there (same idea as the x-overlap clustering in pedDrawFamilyEdges, but
+// done here — before y is finalized — using rank membership instead of
+// exact y, since same-rank families all start from the same provisional
+// height anyway) and returns rank -> y, spacing each gap only as much as
+// that gap actually needs.
+function pedComputeRankY(xById, rankById, pairEdges) {
+  var byChildRank = {};
+  var groups = {};
+  pairEdges.forEach(function(pe) {
+    var key = pe.dam && pe.sire ? ('c:' + pe.dam + '|' + pe.sire) : ('s:' + (pe.dam || pe.sire));
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(pe.child);
+  });
+  Object.keys(groups).forEach(function(key) {
+    var kids = groups[key];
+    var xs = kids.map(function(c) { return xById[c]; }).filter(function(v) { return v != null; });
+    if (!xs.length) return;
+    var rank = rankById[kids[0]];
+    var minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs);
+    (byChildRank[rank] = byChildRank[rank] || []).push({ minX: minX, maxX: maxX });
+  });
+  var xOverlaps = function(a, b) { return a.minX < b.maxX + PED_COL_GAP && a.maxX > b.minX - PED_COL_GAP; };
+  var levelsByRank = {};
+  Object.keys(byChildRank).forEach(function(rank) {
+    var fams = byChildRank[rank];
+    var clusters = [];
+    fams.forEach(function(f) {
+      var joined = null;
+      clusters.forEach(function(c) { if (c.some(function(m) { return xOverlaps(m, f); })) joined = c; });
+      if (joined) joined.push(f); else clusters.push([f]);
+    });
+    for (var merged = true; merged;) {
+      merged = false;
+      outer: for (var a = 0; a < clusters.length; a++) {
+        for (var b = a + 1; b < clusters.length; b++) {
+          if (clusters[a].some(function(m1) { return clusters[b].some(function(m2) { return xOverlaps(m1, m2); }); })) {
+            clusters[a] = clusters[a].concat(clusters[b]);
+            clusters.splice(b, 1);
+            merged = true;
+            break outer;
+          }
+        }
+      }
+    }
+    levelsByRank[rank] = clusters.reduce(function(m, c) { return Math.max(m, c.length); }, 1);
+  });
+  var ranks = {};
+  Object.keys(rankById).forEach(function(id) { ranks[rankById[id]] = true; });
+  var sortedRanks = Object.keys(ranks).map(Number).sort(function(a, b) { return a - b; });
+  var rankY = {};
+  var cumY = 0;
+  sortedRanks.forEach(function(r, i) {
+    if (i > 0) {
+      var levels = levelsByRank[r] || 1;
+      cumY += PED_ROW_GAP_BASE + (levels - 1) * PED_SIB_GAP;
+    }
+    rankY[r] = cumY;
+  });
+  return rankY;
+}
+
 // Renders a computed layout ({positions:{id:{x,y}}, pairEdges, rootId}) into containerEl.
 function pedRenderLayout(containerEl, layout) {
   containerEl.innerHTML = '';
@@ -1111,7 +1177,7 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
   var ids = Object.keys(rank);
   var positions = {};
   ids.forEach(function(id) {
-    positions[id] = { x: slotX[id] * (PED_NODE_W + PED_COL_GAP), y: rank[id] * PED_ROW_H };
+    positions[id] = { x: slotX[id] * (PED_NODE_W + PED_COL_GAP), y: rank[id] };
   });
 
   // The descendant side already collected its own pairEdges above (each
@@ -1126,6 +1192,10 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
     if (damIn || sireIn) pairEdges.push({ dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: id });
   });
 
+  var xById = {}; ids.forEach(function(id) { xById[id] = positions[id].x; });
+  var rankY = pedComputeRankY(xById, rank, pairEdges);
+  ids.forEach(function(id) { positions[id].y = rankY[rank[id]]; });
+
   return { positions: positions, pairEdges: pairEdges, rootId: rootId, isolated: ids.length <= 1, instFor: instFor, marriageNo: marriageNo };
 }
 
@@ -1135,7 +1205,9 @@ function pedLayoutCross(dam, sire) {
     .sort(function(a, b) { return (a.birth_date || '').localeCompare(b.birth_date || '') || a.id.localeCompare(b.id); });
   var positions = {};
   var step = PED_NODE_W + PED_COL_GAP;
-  kids.forEach(function(k, i) { positions[k.id] = { x: i * step, y: PED_ROW_H }; });
+  // Always exactly one family in this view (by construction), so no
+  // sibling-bars will ever need to stack — the plain base gap is enough.
+  kids.forEach(function(k, i) { positions[k.id] = { x: i * step, y: PED_ROW_GAP_BASE }; });
   var centerX = kids.length > 0 ? (kids.length - 1) * step / 2 : 0;
   if (dam && byId[dam]) positions[dam] = { x: centerX - step / 2, y: 0 };
   if (sire && byId[sire]) positions[sire] = { x: centerX + step / 2, y: 0 };
@@ -1277,9 +1349,11 @@ function pedLayoutFull() {
   // point of giving it a separate instance is so ITS children can center on
   // it, not that it needs to be exactly centered on anything itself.
   var positions = {};
+  var instRank = {};
   var step = PED_NODE_W + PED_COL_GAP;
   rankNums.forEach(function(r) {
     var row = rows[r];
+    row.forEach(function(k) { instRank[k] = r; });
     var groups = [];
     for (var i = 0; i < row.length;) {
       var pid0 = instFor[row[i]];
@@ -1314,7 +1388,7 @@ function pedLayoutFull() {
       var left;
       if (gi === 0) left = center == null ? 0 : center - width / 2;
       else left = center == null ? cursor + step : Math.max(center - width / 2, cursor + step);
-      g.ids.forEach(function(k, idx) { positions[k] = { x: left + idx * step, y: r * PED_ROW_H }; });
+      g.ids.forEach(function(k, idx) { positions[k] = { x: left + idx * step, y: r }; });
       cursor = left + width;
     });
   });
@@ -1330,6 +1404,10 @@ function pedLayoutFull() {
     if (damKnown) pairEdges.push({ dam: ind.dam, sire: null, child: ind.id });
     else if (sireKnown) pairEdges.push({ dam: null, sire: ind.sire, child: ind.id });
   });
+
+  var xById = {}; Object.keys(positions).forEach(function(k) { xById[k] = positions[k].x; });
+  var rankY = pedComputeRankY(xById, instRank, pairEdges);
+  Object.keys(positions).forEach(function(k) { positions[k].y = rankY[instRank[k]]; });
 
   return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false, instFor: instFor, marriageNo: marriageNo };
 }
