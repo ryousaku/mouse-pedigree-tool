@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>マウス系図・サンプル検索ツール</title>
 <script src="./xlsx.full.min.js"></script>
+<script src="./madeline2.js"></script>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -366,6 +367,27 @@ function searchFieldValue(ind, field) {
   return v == null ? '' : String(v);
 }
 
+// Plain string comparison would put "S1000" before "S375" (lexicographic:
+// '1' < '3'); this compares alternating digit/non-digit chunks numerically
+// so IDs and mixed labels like "28 5-D" sort in the order a human expects.
+function naturalCompare(a, b) {
+  a = a == null ? '' : String(a);
+  b = b == null ? '' : String(b);
+  var re = /(\d+)|(\D+)/g;
+  var ax = a.match(re) || [], bx = b.match(re) || [];
+  var len = Math.max(ax.length, bx.length);
+  for (var i = 0; i < len; i++) {
+    var as = ax[i] || '', bs = bx[i] || '';
+    if (/^\d+$/.test(as) && /^\d+$/.test(bs)) {
+      var diff = parseInt(as, 10) - parseInt(bs, 10);
+      if (diff) return diff;
+    } else if (as !== bs) {
+      return as < bs ? -1 : 1;
+    }
+  }
+  return 0;
+}
+
 function renderList() {
   var q = searchBox.value.trim().toUpperCase();
   var field = searchFieldSelect.value;
@@ -375,16 +397,26 @@ function renderList() {
     var matchF = !filterFn || filterFn.test(ind);
     return matchQ && matchF;
   });
+  // Sort by whichever key is selected in the dropdown, individual ID as
+  // the tiebreaker — e.g. 保管場所 selected sorts by 保管場所 then ID.
+  items.sort(function(a, b) {
+    return naturalCompare(searchFieldValue(a, field), searchFieldValue(b, field)) || naturalCompare(a.id, b.id);
+  });
   resultList.innerHTML = '';
   if (!items.length) {
     resultList.innerHTML = '<div class="empty-state">該当なし</div>';
     return;
   }
+  // The right-hand column shows whatever key the list is actually sorted
+  // by, so the sort order is visible at a glance — except when sorting by
+  // ID itself (already shown on the left), where showing RNALater/解剖日
+  // instead is more useful than repeating the ID.
   items.slice(0, 300).forEach(function(ind) {
     var el = document.createElement('div');
     el.className = 'result-item';
+    var rightText = field === 'id' ? (ind.rnalater ? ind.rnalater : (ind.dissection_date || '')) : searchFieldValue(ind, field);
     el.innerHTML = '<span>' + sexBadge(ind.sex) + ' <span class="id-mono">' + ind.id + '</span></span>' +
-      '<span class="muted">' + (ind.rnalater ? ind.rnalater : (ind.dissection_date || '')) + '</span>';
+      '<span class="muted">' + rightText + '</span>';
     el.onclick = function() { selectIndividual(ind.id); };
     resultList.appendChild(el);
   });
@@ -580,18 +612,28 @@ function mermaidGoTo(id) {
 // ============================================================
 const PED_NODE_W = 172;
 const PED_NODE_H = 96;
-const PED_COL_GAP = 40;
-const PED_ROW_H = 200;
+const PED_COL_GAP = 60;
+// Generous vertical room used to matter a lot more here: our own
+// hand-rolled layout could dump several marriages' sibling-bars onto the
+// same rank needing to stack, and this was the headroom that turned that
+// into a readable staircase instead of a knot of overlapping arcs. Now
+// that Madeline computes the actual x-separation between families, that
+// stacking case is rare — so this can go back down closer to the node
+// size instead of leaving long, empty-looking trunk lines by default.
+const PED_ROW_H = 260;
 const PED_UNION_GAP = 24;
 // Kept clearly larger than a coincidental gap could be mistaken for a broken
 // line: a couple's parent-connector bar and their sibling bar sit only
 // PED_SIB_GAP apart, and a child column can coincidentally land at the same x
 // as one of its own parents (whose own drop stops at the connector bar) —
 // if the two bars were close together that reads as one cut-off line rather
-// than two distinct bars.
-const PED_SIB_GAP = 40;
-const PED_MIN_DROP = 28; // guaranteed straight run between the sibling bar and a child, so the arrowhead never touches the bar
-const PED_HOP_R = 15; // radius of the little "bridge" arc a vertical line draws when it crosses an unrelated horizontal line
+// than two distinct bars. Also doubles as the spacing between stacked
+// sibling-bars when several marriages collide in the same rank (see
+// pedDrawFamilyEdges) — generous here is what keeps a busy rank from
+// reading as a tangle of musical-staff lines.
+const PED_SIB_GAP = 90;
+const PED_MIN_DROP = 36; // guaranteed straight run between the sibling bar and a child, so the arrowhead never touches the bar
+const PED_HOP_R = 26; // radius of the little "bridge" arc a vertical line draws when it crosses an unrelated horizontal line
 const PED_COLORS = {
   F: { fill: '#ffe3ec', shade: '#ffc2d9', stroke: '#d6336c' },
   M: { fill: '#e3f0ff', shade: '#bfe0ff', stroke: '#1c7ed6' },
@@ -647,6 +689,7 @@ function pedDrawFamilyEdges(svg, positions, pairEdges) {
 
   var hSegs = []; // {x1,x2,y,key} — drawn straight
   var vSegs = []; // {x,y1,y2,key,arrow} — drawn with hops over foreign hSegs
+  var famGeoms = []; // collected first, so overlapping sibling bars (below) can be separated before any segs are drawn
 
   order.forEach(function(key) {
     var group = groups[key];
@@ -693,18 +736,81 @@ function pedDrawFamilyEdges(svg, positions, pairEdges) {
       trunkDrawStartY = onlyPos.y + PED_NODE_H / 2;
     }
     var childTopMinY = Math.min.apply(null, childPts.map(function(p) { return p.y - PED_NODE_H / 2; }));
-    var sibBarY = Math.min(trunkTopY + PED_SIB_GAP, childTopMinY - PED_MIN_DROP);
-    if (sibBarY < trunkTopY) sibBarY = trunkTopY;
-    vSegs.push({ x: trunkX, y1: trunkDrawStartY, y2: sibBarY, key: key });
+    var floorY = trunkTopY, ceilY = childTopMinY - PED_MIN_DROP;
+    var sibBarY = Math.min(floorY + PED_SIB_GAP, ceilY);
+    if (sibBarY < floorY) sibBarY = floorY;
     var minChildX = trunkX, maxChildX = trunkX;
     group.forEach(function(pe) {
       var cp = positions[pe.child];
-      if (!cp) return;
-      minChildX = Math.min(minChildX, cp.x);
-      maxChildX = Math.max(maxChildX, cp.x);
-      vSegs.push({ x: cp.x, y1: sibBarY, y2: cp.y - PED_NODE_H / 2, key: key, arrow: true });
+      if (cp) { minChildX = Math.min(minChildX, cp.x); maxChildX = Math.max(maxChildX, cp.x); }
     });
-    if (maxChildX - minChildX > 0.5) hSegs.push({ x1: minChildX, x2: maxChildX, y: sibBarY, key: key });
+    famGeoms.push({
+      key: key, group: group, trunkX: trunkX, trunkDrawStartY: trunkDrawStartY,
+      sibBarY: sibBarY, floorY: floorY, ceilY: ceilY, minChildX: minChildX, maxChildX: maxChildX,
+    });
+  });
+
+  // A shared parent (one mate remarried, so to speak) puts two unrelated
+  // families' sibling bars in the same rank — same sibBarY by construction —
+  // with their child columns close enough to overlap in x. Drawn plainly,
+  // two same-height overlapping bars fuse into what reads as one continuous
+  // line, hiding which family each child actually belongs to. Group every
+  // family whose x-range overlaps (transitively — A overlapping B and B
+  // overlapping C puts all three together even if A and C don't touch) and
+  // spread that cluster's bars evenly between the shared floor and the
+  // tightest ceiling any member allows, so a bar can never end up stacked
+  // past a child's node regardless of how many families pile up there.
+  var xOverlaps = function(a, b) {
+    return Math.abs(a.sibBarY - b.sibBarY) < 1 &&
+      a.minChildX < b.maxChildX + PED_COL_GAP && a.maxChildX > b.minChildX - PED_COL_GAP;
+  };
+  var clusterOf = famGeoms.map(function() { return null; });
+  var clusters = [];
+  famGeoms.forEach(function(fg, i) {
+    var joined = null;
+    clusters.forEach(function(c) {
+      if (c.some(function(j) { return xOverlaps(famGeoms[j], fg); })) joined = c;
+    });
+    if (joined) joined.push(i);
+    else clusters.push([i]);
+  });
+  // Two clusters can end up bridged by a later member — merge any that share
+  // a family before assigning levels.
+  for (var merged = true; merged;) {
+    merged = false;
+    outer: for (var a = 0; a < clusters.length; a++) {
+      for (var b = a + 1; b < clusters.length; b++) {
+        if (clusters[a].some(function(i) {
+          return clusters[b].some(function(j) { return xOverlaps(famGeoms[i], famGeoms[j]); });
+        })) {
+          clusters[a] = clusters[a].concat(clusters[b]);
+          clusters.splice(b, 1);
+          merged = true;
+          break outer;
+        }
+      }
+    }
+  }
+  clusters.forEach(function(idxs) {
+    if (idxs.length < 2) return;
+    var members = idxs.map(function(i) { return famGeoms[i]; });
+    members.sort(function(a, b) { return a.minChildX - b.minChildX; });
+    var floorY = Math.max.apply(null, members.map(function(m) { return m.floorY; }));
+    var ceilY = Math.min.apply(null, members.map(function(m) { return m.ceilY; }));
+    members.forEach(function(m, level) {
+      var y = ceilY <= floorY ? floorY : floorY + (level + 1) / (members.length + 1) * (ceilY - floorY);
+      m.sibBarY = y;
+    });
+  });
+
+  famGeoms.forEach(function(fg) {
+    vSegs.push({ x: fg.trunkX, y1: fg.trunkDrawStartY, y2: fg.sibBarY, key: fg.key });
+    fg.group.forEach(function(pe) {
+      var cp = positions[pe.child];
+      if (!cp) return;
+      vSegs.push({ x: cp.x, y1: fg.sibBarY, y2: cp.y - PED_NODE_H / 2, key: fg.key, arrow: true });
+    });
+    if (fg.maxChildX - fg.minChildX > 0.5) hSegs.push({ x1: fg.minChildX, x2: fg.maxChildX, y: fg.sibBarY, key: fg.key });
   });
 
   hSegs.forEach(function(h) {
@@ -747,7 +853,7 @@ function pedDrawFamilyEdges(svg, positions, pairEdges) {
 // sides, since symmetric whiskers on both edges reads as "cat", not "mouse".
 // Ear/eye/nose proportions follow a reference sketch (gemini-svg.svg): plain
 // circles clustered tight against the top-right corner, not spread wide.
-function pedDrawNode(svg, ind, x, y, isRoot, clickable) {
+function pedDrawNode(svg, ind, x, y, isRoot, clickable, marriageNo) {
   var g = svgEl('g', { class: 'ped-node' });
   g.style.cursor = clickable ? 'pointer' : 'default';
   var color = pedColor(ind);
@@ -785,6 +891,11 @@ function pedDrawNode(svg, ind, x, y, isRoot, clickable) {
     }));
   });
   var lines = pedLabelLines(ind);
+  // A person with more than one recorded mate gets drawn once per marriage
+  // (see pedLayoutFull) so each marriage's children can hang directly below
+  // their own trunk instead of the two families fighting over one spot.
+  // Mark every instance past the first so it doesn't read as a data error.
+  if (marriageNo) lines[0] += ' (' + marriageNo + '婚)';
   var lineH = 16;
   var text = svgEl('text', {
     x: x, y: y - (lines.length - 1) * lineH / 2 + 4, 'text-anchor': 'middle', 'font-size': '12.5', fill: '#222',
@@ -837,10 +948,14 @@ function pedRenderLayout(containerEl, layout) {
   pedArrowDefs(svg);
   pedDrawFamilyEdges(svg, layout.positions, layout.pairEdges);
   ids.forEach(function(id) {
-    var ind = byId[id];
+    // pedLayoutFull can hand back synthetic per-marriage instance keys
+    // (e.g. "S385#2") that all resolve to the same underlying record.
+    var realId = layout.instFor ? layout.instFor[id] : id;
+    var ind = byId[realId];
     if (!ind) return;
     var pos = layout.positions[id];
-    pedDrawNode(svg, ind, pos.x, pos.y, id === layout.rootId, id !== layout.rootId);
+    var marriageNo = layout.marriageNo ? layout.marriageNo[id] : null;
+    pedDrawNode(svg, ind, pos.x, pos.y, id === layout.rootId, id !== layout.rootId, marriageNo);
   });
   containerEl.appendChild(svg);
 }
@@ -850,6 +965,8 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
   var slotX = {};
   var rank = {};
   var nextLeaf = 0;
+  var instFor = {}, marriageNo = {};
+  var pairEdges = [];
 
   // Descendants first (post-order): leaves get sequential slots, each parent
   // is centered over the span of its own children. This also fixes rootId's
@@ -859,39 +976,91 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
   // with an already-placed sibling/leaf at the same rank.
   var occupied = {};
   var descSeen = {};
-  function visitDown(id, depth, r) {
-    if (descSeen[id]) return;
-    descSeen[id] = true;
-    rank[id] = r;
-    var kids = depth > 0 ? children(id).slice().sort(function(a, b) {
-      return (a.birth_date || '').localeCompare(b.birth_date || '') || a.id.localeCompare(b.id);
-    }) : [];
+  // Someone can be a blood descendant AND, separately, married in to another
+  // blood descendant shown in the same view (e.g. two siblings' families
+  // both traced from a shared strain — not actually rare in a breeding
+  // colony). Depth-first, the spouse-leaf reached first would otherwise
+  // squat on that person's descSeen slot with a position centered on their
+  // IN-LAW family instead of their own birth siblings. This pre-pass (true
+  // parent→child edges only, no spouses) marks who has a real birth slot
+  // coming up, so the spouse-leaf step below knows to leave them for it.
+  var canonicalRank = {};
+  (function() {
+    var seen = {};
+    function walk(id, depth, r) {
+      if (seen[id]) return;
+      seen[id] = true;
+      canonicalRank[id] = r;
+      if (depth <= 0) return;
+      children(id).forEach(function(k) { walk(k.id, depth - 1, r + 1); });
+    }
+    walk(rootId, downDepth, 0);
+  })();
+  // Same McGoldrick-Gerson idea as pedLayoutFull: if id had children with
+  // more than one mate, one shared slot can't sit centered under both
+  // families at once. Group id's kids by co-parent and give every group
+  // past the first a duplicate instance of id (id#2, id#3, ...) so each
+  // mate's children get their own directly-centered trunk.
+  function visitDown(id, depth, r, instKey) {
+    instKey = instKey || id;
+    if (descSeen[instKey]) return;
+    descSeen[instKey] = true;
+    rank[instKey] = r;
+    instFor[instKey] = id;
+    var kids = depth > 0 ? children(id) : [];
     if (!kids.length) {
-      slotX[id] = nextLeaf;
+      slotX[instKey] = nextLeaf;
       occupied[r + '|' + nextLeaf] = true;
       nextLeaf += 1;
       return;
     }
-    kids.forEach(function(k) { visitDown(k.id, depth - 1, r + 1); });
-    var xs = kids.map(function(k) { return slotX[k.id]; });
-    slotX[id] = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
-
-    // Show each kid's OTHER parent too, as a plain leaf beside id (no further
-    // ancestor expansion into their own family) — without this, a child with
-    // two known parents renders as if it only had the one being viewed,
-    // which looks wrong once you notice it.
-    var seenSpouse = {};
+    kids.sort(function(a, b) { return (a.birth_date || '').localeCompare(b.birth_date || '') || a.id.localeCompare(b.id); });
+    var groups = [], groupOf = {};
     kids.forEach(function(k) {
       var other = (k.dam === id) ? k.sire : k.dam;
-      if (!other || !byId[other] || descSeen[other] || seenSpouse[other]) return;
-      seenSpouse[other] = true;
-      var slot = slotX[id] + 1;
-      if (occupied[r + '|' + slot]) slot = slotX[id] - 1;
-      if (occupied[r + '|' + slot]) { slot = nextLeaf; nextLeaf += 1; }
-      rank[other] = r;
-      slotX[other] = slot;
-      occupied[r + '|' + slot] = true;
-      descSeen[other] = true;
+      var gk = other || '(unknown)';
+      if (!groupOf[gk]) { groupOf[gk] = { spouse: other, kids: [] }; groups.push(groupOf[gk]); }
+      groupOf[gk].kids.push(k);
+    });
+    groups.forEach(function(g, gi) {
+      var myKey = gi === 0 ? instKey : id + '#' + (gi + 1);
+      if (gi > 0) { descSeen[myKey] = true; rank[myKey] = r; instFor[myKey] = id; marriageNo[myKey] = gi + 1; }
+      g.kids.forEach(function(k) {
+        visitDown(k.id, depth - 1, r + 1);
+        var damIn = k.dam && byId[k.dam], sireIn = k.sire && byId[k.sire];
+        var damInst = k.dam === id ? myKey : (g.spouse && k.dam === g.spouse ? g.spouse : k.dam);
+        var sireInst = k.sire === id ? myKey : (g.spouse && k.sire === g.spouse ? g.spouse : k.sire);
+        pairEdges.push({ dam: damIn ? damInst : null, sire: sireIn ? sireInst : null, child: k.id });
+      });
+      // Usually every kid here is being positioned for the first time, so
+      // this center is fresh territory. But a kid can already have been
+      // placed by an EARLIER branch — e.g. two of id's own children marry
+      // each other's lineage back together (not actually rare in a strain
+      // bred somewhat in-house) — in which case this center can land right
+      // on top of an already-occupied slot. Nudge until clear rather than
+      // silently drawing two nodes on top of each other.
+      var xs = g.kids.map(function(k) { return slotX[k.id]; });
+      var center = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
+      while (occupied[r + '|' + center]) center += 1;
+      slotX[myKey] = center;
+      occupied[r + '|' + center] = true;
+
+      // Show this group's OTHER parent too, as a plain leaf beside myKey (no
+      // further ancestor expansion into their own family) — without this, a
+      // child with two known parents renders as if it only had the one
+      // being viewed, which looks wrong once you notice it. But not if this
+      // "in-law" has their own real birth slot coming up elsewhere in this
+      // same view (see canonicalRank above) — let that claim them instead.
+      if (g.spouse && byId[g.spouse] && !descSeen[g.spouse] && canonicalRank[g.spouse] == null) {
+        var slot = slotX[myKey] + 1;
+        if (occupied[r + '|' + slot]) slot = slotX[myKey] - 1;
+        if (occupied[r + '|' + slot]) { slot = nextLeaf; nextLeaf += 1; }
+        rank[g.spouse] = r;
+        slotX[g.spouse] = slot;
+        occupied[r + '|' + slot] = true;
+        descSeen[g.spouse] = true;
+        instFor[g.spouse] = g.spouse;
+      }
     });
   }
   visitDown(rootId, downDepth, 0);
@@ -923,6 +1092,7 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
     ancSeen[id] = true;
     rank[id] = r;
     slotX[id] = mySlot;
+    instFor[id] = id;
     if (depth <= 0) return;
     var ind = byId[id];
     var dam = ind && ind.dam && byId[ind.dam] ? ind.dam : null;
@@ -947,8 +1117,11 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
     positions[id] = { x: slotX[id] * (PED_NODE_W + PED_COL_GAP), y: rank[id] * PED_ROW_H };
   });
 
-  var pairEdges = [];
-  ids.forEach(function(id) {
+  // The descendant side already collected its own pairEdges above (each
+  // child pinned to the specific marriage-instance that produced it); only
+  // the ancestor side — always a single plain-id lineage, never multiply
+  // mated in this direction — still needs its child→parent edges added.
+  Object.keys(ancSeen).forEach(function(id) {
     var ind = byId[id];
     if (!ind) return;
     var damIn = ind.dam && positions[ind.dam];
@@ -956,7 +1129,7 @@ function pedLayoutIndividual(rootId, upDepth, downDepth) {
     if (damIn || sireIn) pairEdges.push({ dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: id });
   });
 
-  return { positions: positions, pairEdges: pairEdges, rootId: rootId, isolated: ids.length <= 1 };
+  return { positions: positions, pairEdges: pairEdges, rootId: rootId, isolated: ids.length <= 1, instFor: instFor, marriageNo: marriageNo };
 }
 
 // ---- layout: a single dam x sire pair plus their shared children ----
@@ -973,7 +1146,238 @@ function pedLayoutCross(dam, sire) {
   return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
 }
 
+// ---- layout: entire database, positions computed by the real Madeline 2.0
+// ---- algorithm (compiled to WebAssembly), our own SVG drawing on top ----
+//
+// Madeline 2.0 PDE (github.com/piratical/Madeline_2.0_PDE, GPL) is a
+// clinically-used pedigree layout engine whose algorithm actually handles
+// what our own hand-rolled layout couldn't: it draws a shared parent's
+// second marriage as its own separated subtree (not a duplicated node —
+// verified directly: a two-marriage test individual's id appears exactly
+// once in Madeline's own SVG output, with each marriage's children
+// correctly clustered under it), and it resolves consanguineous loops
+// (e.g. two cousins marrying back into the same tree) as an actual cyclic
+// graph instead of silently overlapping two nodes, which is what our own
+// layout did until a manual collision nudge papered over it.
+//
+// The compiled madeline2.js/.wasm (built from that source, unmodified
+// except for stripping unrelated features — XML input, network fetch,
+// translation catalogs — that need libraries this WASM build doesn't carry;
+// see the source tree's CMakeLists.txt comments for exactly what and why)
+// runs Madeline for real on our data and produces a genuine Madeline SVG.
+// We only keep its node CENTER positions from that SVG — not its line
+// drawing or icon style — and hand those to our own pedDrawFamilyEdges /
+// pedDrawNode so the rest of the tool (mouse artwork, H/V-only lines,
+// click-through) is unaffected.
+function individualsToMadelineTSV() {
+  var FAMILY_ID = 'ALL';
+  var lines = ['Individualid\tFamilyid\tGender\tMother\tFather'];
+  individuals.forEach(function(ind) {
+    var sex = ind.sex === 'F' ? 'f' : ind.sex === 'M' ? 'm' : '.';
+    var dam = ind.dam && byId[ind.dam] ? ind.dam : '.';
+    var sire = ind.sire && byId[ind.sire] ? ind.sire : '.';
+    lines.push([ind.id, FAMILY_ID, sex, dam, sire].join('\t'));
+  });
+  return { tsv: lines.join('\n') + '\n', familyId: FAMILY_ID };
+}
+
+async function runMadelineLayout(tsv, familyId) {
+  if (typeof createMadeline !== 'function') {
+    throw new Error('madeline2.js が読み込まれていません(ファイルが同じフォルダにありますか？)');
+  }
+  // A fresh module per call: Madeline keeps pedigree state in C++
+  // globals/statics for the duration of one CLI run, so reusing one
+  // instance across multiple layouts would leak state between them.
+  var mod = await createMadeline({ print: function() {}, printErr: function() {} });
+  mod.FS.writeFile('/in.data', tsv);
+  mod.callMain(['--outputext', 'svg', '/in.data']);
+  return mod.FS.readFile('/' + familyId + '_pedigree.svg', { encoding: 'utf8' });
+}
+
+// Madeline wraps its drawing in a <g transform="translate(...)"> whose
+// offset depends on the input (varies in magnitude AND sign — confirmed
+// against real output, not assumed), so raw x/y attributes are wrong by
+// exactly that offset. Inserting the SVG into the real DOM and reading
+// getScreenCTM() resolves whatever transform chain Madeline used without
+// having to parse or track it ourselves; centering on getBBox() also
+// folds rect's top-left origin and circle's center origin into one
+// consistent point per node.
+function extractPositionsFromSVG(svgText) {
+  var host = document.createElement('div');
+  host.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:-99999px;';
+  host.innerHTML = svgText;
+  document.body.appendChild(host);
+  var svg = host.querySelector('svg');
+  var out = {};
+  if (!svg) { host.remove(); return out; }
+  var rootInv = svg.getScreenCTM().inverse();
+  svg.querySelectorAll('rect[id], circle[id]').forEach(function(el) {
+    var b = el.getBBox();
+    var m = rootInv.multiply(el.getScreenCTM());
+    var p = svg.createSVGPoint();
+    p.x = b.x + b.width / 2;
+    p.y = b.y + b.height / 2;
+    var q = p.matrixTransform(m);
+    out[el.id] = { x: q.x, y: q.y };
+  });
+  host.remove();
+  return out;
+}
+
+// Madeline sizes its own grid to its own icon/label metrics, so its raw
+// pixel spacing doesn't match our mouse artwork's size — snap each
+// coordinate to Madeline's logical grid index (nearest-neighbor gap = one
+// grid step) first, then re-space using our own PED_* constants.
+function snapToOwnGrid(rawPositions) {
+  function axisSteps(values) {
+    var uniq = values.slice().sort(function(a, b) { return a - b; })
+      .filter(function(v, i, arr) { return i === 0 || v - arr[i - 1] > 1; });
+    var pitch = Infinity;
+    for (var i = 1; i < uniq.length; i++) pitch = Math.min(pitch, uniq[i] - uniq[i - 1]);
+    if (!isFinite(pitch) || pitch <= 0) pitch = 1;
+    return { min: uniq.length ? uniq[0] : 0, pitch: pitch };
+  }
+  var ids = Object.keys(rawPositions);
+  var xAxis = axisSteps(ids.map(function(id) { return rawPositions[id].x; }));
+  var yAxis = axisSteps(ids.map(function(id) { return rawPositions[id].y; }));
+  var xStep = PED_NODE_W + PED_COL_GAP;
+  var out = {};
+  ids.forEach(function(id) {
+    var p = rawPositions[id];
+    var col = Math.round((p.x - xAxis.min) / xAxis.pitch);
+    var row = Math.round((p.y - yAxis.min) / yAxis.pitch);
+    out[id] = { x: col * xStep, y: row * PED_ROW_H };
+  });
+  return out;
+}
+
+async function pedLayoutFullViaMadeline() {
+  var built = individualsToMadelineTSV();
+  var svgText = await runMadelineLayout(built.tsv, built.familyId);
+  var rawPositions = extractPositionsFromSVG(svgText);
+  var positions = snapToOwnGrid(rawPositions);
+  var pairEdges = individuals.map(function(ind) {
+    var damIn = ind.dam && positions[ind.dam];
+    var sireIn = ind.sire && positions[ind.sire];
+    return { dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: ind.id };
+  }).filter(function(pe) { return (pe.dam || pe.sire) && positions[pe.child]; });
+  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
+}
+
+// ---- layout: one individual's ancestors/descendants, via Madeline ----
+//
+// Same idea as pedLayoutFullViaMadeline, scoped to a bounded neighborhood
+// instead of everyone. Ancestors are walked up to upDepth generations;
+// descendants down to downDepth, and each descendant's OTHER parent is
+// pulled in too (a child with two known parents shouldn't look like it
+// only had the one being viewed) — but that spouse's own further ancestry
+// is deliberately not expanded, matching the old single-individual view's
+// behavior. That boundary is enforced by feeding Madeline "." (unknown)
+// for a spouse-leaf's parents even where our data actually has them —
+// UNLESS that person also has a real inclusion path of their own
+// elsewhere in this same neighborhood (e.g. two shown relatives marry each
+// other), in which case their real parents are kept so Madeline can draw
+// that as the loop it actually is instead of hiding it.
+function individualToMadelineTSVSubset(rootId, upDepth, downDepth) {
+  var include = {}, leafOnly = {}, descSeen = {}, ancSeen = {};
+  function visitDown(id, depth) {
+    if (descSeen[id]) return;
+    descSeen[id] = true;
+    include[id] = true;
+    delete leafOnly[id];
+    if (depth <= 0) return;
+    children(id).forEach(function(k) {
+      visitDown(k.id, depth - 1);
+      var other = (k.dam === id) ? k.sire : k.dam;
+      if (other && byId[other] && !include[other]) {
+        include[other] = true;
+        leafOnly[other] = true;
+      }
+    });
+  }
+  function visitUp(id, depth) {
+    if (ancSeen[id]) return;
+    ancSeen[id] = true;
+    include[id] = true;
+    delete leafOnly[id];
+    if (depth <= 0) return;
+    var ind = byId[id];
+    if (ind.dam && byId[ind.dam]) visitUp(ind.dam, depth - 1);
+    if (ind.sire && byId[ind.sire]) visitUp(ind.sire, depth - 1);
+  }
+  visitUp(rootId, upDepth);
+  visitDown(rootId, downDepth);
+
+  var FAMILY_ID = 'IND';
+  var ids = Object.keys(include);
+  var effectiveParents = {};
+  var lines = ['Individualid\tFamilyid\tGender\tMother\tFather'];
+  ids.forEach(function(id) {
+    var ind = byId[id];
+    var sex = ind.sex === 'F' ? 'f' : ind.sex === 'M' ? 'm' : '.';
+    var dam = null, sire = null;
+    if (!leafOnly[id]) {
+      if (ind.dam && include[ind.dam]) dam = ind.dam;
+      if (ind.sire && include[ind.sire]) sire = ind.sire;
+    }
+    effectiveParents[id] = { dam: dam, sire: sire };
+    lines.push([id, FAMILY_ID, sex, dam || '.', sire || '.'].join('\t'));
+  });
+  return { tsv: lines.join('\n') + '\n', familyId: FAMILY_ID, ids: ids, effectiveParents: effectiveParents };
+}
+
+async function pedLayoutIndividualViaMadeline(rootId, upDepth, downDepth) {
+  var built = individualToMadelineTSVSubset(rootId, upDepth, downDepth);
+  if (built.ids.length <= 1) {
+    return { positions: {}, pairEdges: [], rootId: rootId, isolated: true };
+  }
+  var svgText = await runMadelineLayout(built.tsv, built.familyId);
+  var positions = snapToOwnGrid(extractPositionsFromSVG(svgText));
+  var pairEdges = built.ids.map(function(id) {
+    var p = built.effectiveParents[id];
+    var damIn = p.dam && positions[p.dam];
+    var sireIn = p.sire && positions[p.sire];
+    return { dam: damIn ? p.dam : null, sire: sireIn ? p.sire : null, child: id };
+  }).filter(function(pe) { return (pe.dam || pe.sire) && positions[pe.child]; });
+  return { positions: positions, pairEdges: pairEdges, rootId: rootId, isolated: false };
+}
+
+// ---- layout: a single dam x sire pair plus their shared children, via
+// ---- Madeline (kept simple — it's already a bounded, unambiguous shape) ----
+async function pedLayoutCrossViaMadeline(dam, sire) {
+  var kids = individuals.filter(function(ind) { return dam && sire && ind.dam === dam && ind.sire === sire; });
+  var FAMILY_ID = 'CROSS';
+  var lines = ['Individualid\tFamilyid\tGender\tMother\tFather'];
+  if (dam && byId[dam]) lines.push([dam, FAMILY_ID, 'f', '.', '.'].join('\t'));
+  if (sire && byId[sire]) lines.push([sire, FAMILY_ID, 'm', '.', '.'].join('\t'));
+  kids.forEach(function(k) {
+    var sex = k.sex === 'F' ? 'f' : k.sex === 'M' ? 'm' : '.';
+    lines.push([k.id, FAMILY_ID, sex, dam, sire].join('\t'));
+  });
+  var svgText = await runMadelineLayout(lines.join('\n') + '\n', FAMILY_ID);
+  var positions = snapToOwnGrid(extractPositionsFromSVG(svgText));
+  var pairEdges = kids.map(function(k) { return { dam: dam, sire: sire, child: k.id }; })
+    .filter(function(pe) { return positions[pe.child]; });
+  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
+}
+
 // ---- layout: entire database (topological rank + a light barycenter pass) ----
+// Fallback for pedLayoutFullViaMadeline (e.g. madeline2.wasm failed to load)
+// — same shared-parent duplicate-instance handling, kept for that case only.
+//
+// Follows the McGoldrick-Gerson genogram convention for anyone with more
+// than one mate (as used by pedigreejs, github.com/CCGE-BOADICEA/pedigreejs,
+// a clinically-used open-source pedigree editor): draw that person once per
+// marriage rather than once total. A single shared position can only ever
+// satisfy ONE of their families' "children hang directly below their own
+// parents" requirement at a time — with two, the second family's trunk has
+// to jog sideways to reach the shared parent, which is exactly what made
+// the diagram unreadable for anyone with a remarried/multiply-mated parent.
+// Giving each marriage its own instance of that parent (id, id#2, id#3, ...)
+// at the same rank sidesteps the conflict entirely: pedigreejs does this by
+// inserting a hidden "union" tree-node per couple; the instance-keying below
+// is the same idea adapted to this file's flat positions/pairEdges shape
+// instead of a d3-hierarchy tree.
 function pedLayoutFull() {
   var rank = {};
   var visiting = {};
@@ -993,63 +1397,168 @@ function pedLayoutFull() {
   }
   individuals.forEach(function(ind) { computeRank(ind.id); });
 
+  // Every (dam,sire) pair with at least one recorded child is a "union."
+  // unionsOf[personId] lists every union they parent, oldest child first —
+  // that ordering is what decides which marriage keeps their plain id and
+  // which get id#2, id#3, ...
+  var unionKids = {};
+  individuals.forEach(function(ind) {
+    if (ind.dam && ind.sire && byId[ind.dam] && byId[ind.sire]) {
+      var uk = ind.dam + '|' + ind.sire;
+      (unionKids[uk] = unionKids[uk] || []).push(ind.id);
+    }
+  });
+  var unionsOf = {};
+  Object.keys(unionKids).forEach(function(uk) {
+    var parts = uk.split('|'), dam = parts[0], sire = parts[1];
+    var earliest = unionKids[uk].map(function(k) { return byId[k].birth_date || ''; }).sort()[0] || '';
+    [dam, sire].forEach(function(pid) { (unionsOf[pid] = unionsOf[pid] || []).push({ uk: uk, earliest: earliest }); });
+  });
+  Object.keys(unionsOf).forEach(function(pid) {
+    unionsOf[pid].sort(function(a, b) { return a.earliest.localeCompare(b.earliest) || a.uk.localeCompare(b.uk); });
+  });
+  function instanceFor(pid, uk) {
+    var list = unionsOf[pid];
+    if (!list || list.length <= 1) return pid;
+    var idx = list.findIndex(function(u) { return u.uk === uk; });
+    return idx <= 0 ? pid : pid + '#' + (idx + 1);
+  }
+
+  // instFor maps every instance key back to the real individual id (used
+  // whenever drawing needs the actual record); unionForInstance says which
+  // union THIS instance is the parent-side of (used for the child-facing
+  // barycenter pass and, below, for clustering that union's children).
   var rows = {};
-  individuals.forEach(function(ind) { (rows[rank[ind.id]] = rows[rank[ind.id]] || []).push(ind.id); });
+  var instFor = {}, marriageNo = {}, unionForInstance = {};
+  individuals.forEach(function(ind) {
+    var r = rank[ind.id];
+    (rows[r] = rows[r] || []).push(ind.id);
+    instFor[ind.id] = ind.id;
+    var list = unionsOf[ind.id];
+    if (list && list.length) {
+      unionForInstance[ind.id] = list[0].uk;
+      for (var k = 1; k < list.length; k++) {
+        var extra = ind.id + '#' + (k + 1);
+        rows[r].push(extra);
+        instFor[extra] = ind.id;
+        marriageNo[extra] = k + 1;
+        unionForInstance[extra] = list[k].uk;
+      }
+    }
+  });
   var rankNums = Object.keys(rows).map(Number).sort(function(a, b) { return a - b; });
   var order = {};
   rankNums.forEach(function(r) {
     rows[r].sort();
-    rows[r].forEach(function(id, i) { order[id] = i; });
+    rows[r].forEach(function(k, i) { order[k] = i; });
   });
 
-  function parentIds(id) {
-    var ind = byId[id], out = [];
-    if (ind.dam && byId[ind.dam]) out.push(ind.dam);
-    if (ind.sire && byId[ind.sire]) out.push(ind.sire);
+  // Only a person's PLAIN instance is pulled toward their own birth parents —
+  // a "#2" marriage instance isn't a child of anyone, it exists purely to
+  // carry that marriage's own trunk, so it's positioned by its children only
+  // (below) plus, here, by having no parent pull at all.
+  function parentInstances(k) {
+    var pid = instFor[k];
+    if (k !== pid) return [];
+    var ind = byId[pid], out = [];
+    var uk = ind.dam && ind.sire ? (ind.dam + '|' + ind.sire) : null;
+    if (ind.dam && byId[ind.dam]) out.push(uk ? instanceFor(ind.dam, uk) : ind.dam);
+    if (ind.sire && byId[ind.sire]) out.push(uk ? instanceFor(ind.sire, uk) : ind.sire);
     return out;
   }
-  var childrenCache = {};
-  function childIds(id) {
-    if (!childrenCache[id]) childrenCache[id] = children(id).map(function(k) { return k.id; });
-    return childrenCache[id];
+  function childInstances(k) {
+    var uk = unionForInstance[k];
+    return uk ? (unionKids[uk] || []) : [];
   }
   function barycenterPass(rs, getNeighbors) {
     rs.forEach(function(r) {
-      var scored = rows[r].map(function(id) {
-        var neigh = getNeighbors(id).map(function(nid) { return order[nid]; }).filter(function(v) { return v != null; });
-        var score = neigh.length ? neigh.reduce(function(a, b) { return a + b; }, 0) / neigh.length : order[id];
-        return { id: id, score: score };
+      var scored = rows[r].map(function(k) {
+        var neigh = getNeighbors(k).map(function(nk) { return order[nk]; }).filter(function(v) { return v != null; });
+        var score = neigh.length ? neigh.reduce(function(a, b) { return a + b; }, 0) / neigh.length : order[k];
+        return { k: k, score: score };
       });
       scored.sort(function(a, b) { return a.score - b.score; });
-      rows[r] = scored.map(function(s) { return s.id; });
-      rows[r].forEach(function(id, i) { order[id] = i; });
+      rows[r] = scored.map(function(s) { return s.k; });
+      rows[r].forEach(function(k, i) { order[k] = i; });
     });
   }
   for (var iter = 0; iter < 2; iter++) {
-    barycenterPass(rankNums.slice(1), parentIds);
-    barycenterPass(rankNums.slice(0, -1).reverse(), childIds);
+    barycenterPass(rankNums.slice(1), parentInstances);
+    barycenterPass(rankNums.slice(0, -1).reverse(), childInstances);
   }
 
+  // Position assignment: the barycenter passes above only fixed left-right
+  // ORDER; positions still need deciding. Cluster full-sibling runs together
+  // (the barycenter order already leaves them contiguous, since siblings
+  // share the exact same score) and center each cluster on its own birth
+  // parents' midpoint, pushed right only as far as needed to avoid
+  // overlapping the previous cluster. A marriage instance (id#2, ...) has no
+  // birth-parent target of its own, so it just falls in sequentially — the
+  // point of giving it a separate instance is so ITS children can center on
+  // it, not that it needs to be exactly centered on anything itself.
   var positions = {};
   var step = PED_NODE_W + PED_COL_GAP;
   rankNums.forEach(function(r) {
-    rows[r].forEach(function(id, i) { positions[id] = { x: i * step, y: r * PED_ROW_H }; });
+    var row = rows[r];
+    var groups = [];
+    for (var i = 0; i < row.length;) {
+      var pid0 = instFor[row[i]];
+      var ind0 = byId[pid0];
+      var isPrimary0 = row[i] === pid0;
+      var bkey0 = isPrimary0 && ind0.dam && ind0.sire ? ('b:' + ind0.dam + '|' + ind0.sire) : ('solo:' + row[i]);
+      var ids = [row[i]];
+      var j = i + 1;
+      while (j < row.length) {
+        var pidj = instFor[row[j]];
+        var indj = byId[pidj];
+        var isPrimaryj = row[j] === pidj;
+        var bkeyj = isPrimaryj && indj.dam && indj.sire ? ('b:' + indj.dam + '|' + indj.sire) : ('solo:' + row[j]);
+        if (bkeyj !== bkey0) break;
+        ids.push(row[j]);
+        j++;
+      }
+      groups.push({ ids: ids, dam: isPrimary0 ? ind0.dam : null, sire: isPrimary0 ? ind0.sire : null });
+      i = j;
+    }
+    var cursor = -Infinity;
+    groups.forEach(function(g, gi) {
+      var width = (g.ids.length - 1) * step;
+      var center = null;
+      if (g.dam || g.sire) {
+        var uk = g.dam && g.sire ? (g.dam + '|' + g.sire) : null;
+        var damInst = g.dam ? (uk ? instanceFor(g.dam, uk) : g.dam) : null;
+        var sireInst = g.sire ? (uk ? instanceFor(g.sire, uk) : g.sire) : null;
+        var damPos = damInst && positions[damInst], sirePos = sireInst && positions[sireInst];
+        center = damPos && sirePos ? (damPos.x + sirePos.x) / 2 : damPos ? damPos.x : sirePos ? sirePos.x : null;
+      }
+      var left;
+      if (gi === 0) left = center == null ? 0 : center - width / 2;
+      else left = center == null ? cursor + step : Math.max(center - width / 2, cursor + step);
+      g.ids.forEach(function(k, idx) { positions[k] = { x: left + idx * step, y: r * PED_ROW_H }; });
+      cursor = left + width;
+    });
   });
 
-  var pairEdges = individuals.map(function(ind) {
-    var damIn = ind.dam && byId[ind.dam];
-    var sireIn = ind.sire && byId[ind.sire];
-    return { dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: ind.id };
-  }).filter(function(pe) { return pe.dam || pe.sire; });
+  var pairEdges = [];
+  Object.keys(unionKids).forEach(function(uk) {
+    var parts = uk.split('|'), damInst = instanceFor(parts[0], uk), sireInst = instanceFor(parts[1], uk);
+    unionKids[uk].forEach(function(childId) { pairEdges.push({ dam: damInst, sire: sireInst, child: childId }); });
+  });
+  individuals.forEach(function(ind) {
+    var damKnown = ind.dam && byId[ind.dam], sireKnown = ind.sire && byId[ind.sire];
+    if (damKnown && sireKnown) return; // already covered via unionKids above
+    if (damKnown) pairEdges.push({ dam: ind.dam, sire: null, child: ind.id });
+    else if (sireKnown) pairEdges.push({ dam: null, sire: ind.sire, child: ind.id });
+  });
 
-  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
+  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false, instFor: instFor, marriageNo: marriageNo };
 }
 
 // Shows the dam x sire pair (plus their children) inside the same "系図図"
 // box used for a single individual's ancestor/descendant view, rather than a
 // separate panel. Reuses selectIndividual() to populate the rest of the
 // detail card (using dam as the anchor), then overrides just the diagram box.
-function showCrossMermaid(dam, sire) {
+async function showCrossMermaid(dam, sire) {
   var anchorId = (dam && byId[dam]) ? dam : sire;
   if (!anchorId) return;
   selectIndividual(anchorId);
@@ -1059,14 +1568,29 @@ function showCrossMermaid(dam, sire) {
   var container = document.getElementById('mermaidIndividual');
   if (title) title.textContent = '系図図 — ' + (dam || '?') + ' × ' + (sire || '?');
   if (toolbar) toolbar.style.display = 'none';
-  if (container) pedRenderLayout(container, pedLayoutCross(dam, sire));
+  if (container) {
+    container.innerHTML = '<span class="muted">描画中...</span>';
+    try {
+      pedRenderLayout(container, await pedLayoutCrossViaMadeline(dam, sire));
+    } catch (e) {
+      console.error('Madeline layout failed, falling back to built-in layout:', e);
+      pedRenderLayout(container, pedLayoutCross(dam, sire));
+    }
+  }
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-function renderIndividualMermaid(rootId, upDepth, downDepth) {
+async function renderIndividualMermaid(rootId, upDepth, downDepth) {
   var container = document.getElementById('mermaidIndividual');
   if (!container) return;
-  var layout = pedLayoutIndividual(rootId, upDepth, downDepth);
+  container.innerHTML = '<span class="muted">描画中...</span>';
+  var layout;
+  try {
+    layout = await pedLayoutIndividualViaMadeline(rootId, upDepth, downDepth);
+  } catch (e) {
+    console.error('Madeline layout failed, falling back to built-in layout:', e);
+    layout = pedLayoutIndividual(rootId, upDepth, downDepth);
+  }
   container.innerHTML = '';
   if (layout.isolated) {
     var note = document.createElement('div');
@@ -1160,13 +1684,19 @@ document.querySelectorAll('#crossTable th').forEach(function(th) {
 });
 
 // ---- full pedigree diagram ----
-document.getElementById('showFullMermaidBtn').onclick = function() {
+document.getElementById('showFullMermaidBtn').onclick = async function() {
   var container = document.getElementById('mermaidFull');
   container.style.display = 'block';
-  container.innerHTML = '<span class="muted">描画中...(個体数が多いため数秒かかることがあります)</span>';
-  setTimeout(function() {
+  container.innerHTML = '<span class="muted">描画中...(Madelineエンジンで配置計算中、個体数が多いため数秒かかることがあります)</span>';
+  await new Promise(function(r) { setTimeout(r, 30); });
+  try {
+    var layout = await pedLayoutFullViaMadeline();
+    pedRenderLayout(container, layout);
+  } catch (e) {
+    console.error('Madeline layout failed, falling back to built-in layout:', e);
+    container.innerHTML = '<div class="muted" style="color:#a30000">Madelineエンジンでの配置に失敗したため、簡易レイアウトで表示します(' + e.message + ')</div>';
     pedRenderLayout(container, pedLayoutFull());
-  }, 30);
+  }
 };
 
 // ---- load data from Excel ----
