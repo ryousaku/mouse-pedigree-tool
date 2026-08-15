@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>マウス系図・サンプル検索ツール</title>
 <script src="./xlsx.full.min.js"></script>
-<script src="./madeline2.js"></script>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -613,14 +612,12 @@ function mermaidGoTo(id) {
 const PED_NODE_W = 172;
 const PED_NODE_H = 96;
 const PED_COL_GAP = 60;
-// Generous vertical room used to matter a lot more here: our own
-// hand-rolled layout could dump several marriages' sibling-bars onto the
-// same rank needing to stack, and this was the headroom that turned that
-// into a readable staircase instead of a knot of overlapping arcs. Now
-// that Madeline computes the actual x-separation between families, that
-// stacking case is rare — so this can go back down closer to the node
-// size instead of leaving long, empty-looking trunk lines by default.
-const PED_ROW_H = 260;
+// This is rendered in an SVG on an HTML page — there's no sheet of paper to
+// run out of, so when a rank needs several stacked sibling-bars (a mate with
+// several marriages, each hopping over the others' bars) there's no reason
+// to cram them into a tight band. Generous vertical room turns that into a
+// readable staircase instead of a knot of overlapping arcs.
+const PED_ROW_H = 480;
 const PED_UNION_GAP = 24;
 // Kept clearly larger than a coincidental gap could be mistaken for a broken
 // line: a couple's parent-connector bar and their sibling bar sit only
@@ -1146,224 +1143,7 @@ function pedLayoutCross(dam, sire) {
   return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
 }
 
-// ---- layout: entire database, positions computed by the real Madeline 2.0
-// ---- algorithm (compiled to WebAssembly), our own SVG drawing on top ----
-//
-// Madeline 2.0 PDE (github.com/piratical/Madeline_2.0_PDE, GPL) is a
-// clinically-used pedigree layout engine whose algorithm actually handles
-// what our own hand-rolled layout couldn't: it draws a shared parent's
-// second marriage as its own separated subtree (not a duplicated node —
-// verified directly: a two-marriage test individual's id appears exactly
-// once in Madeline's own SVG output, with each marriage's children
-// correctly clustered under it), and it resolves consanguineous loops
-// (e.g. two cousins marrying back into the same tree) as an actual cyclic
-// graph instead of silently overlapping two nodes, which is what our own
-// layout did until a manual collision nudge papered over it.
-//
-// The compiled madeline2.js/.wasm (built from that source, unmodified
-// except for stripping unrelated features — XML input, network fetch,
-// translation catalogs — that need libraries this WASM build doesn't carry;
-// see the source tree's CMakeLists.txt comments for exactly what and why)
-// runs Madeline for real on our data and produces a genuine Madeline SVG.
-// We only keep its node CENTER positions from that SVG — not its line
-// drawing or icon style — and hand those to our own pedDrawFamilyEdges /
-// pedDrawNode so the rest of the tool (mouse artwork, H/V-only lines,
-// click-through) is unaffected.
-function individualsToMadelineTSV() {
-  var FAMILY_ID = 'ALL';
-  var lines = ['Individualid\tFamilyid\tGender\tMother\tFather'];
-  individuals.forEach(function(ind) {
-    var sex = ind.sex === 'F' ? 'f' : ind.sex === 'M' ? 'm' : '.';
-    var dam = ind.dam && byId[ind.dam] ? ind.dam : '.';
-    var sire = ind.sire && byId[ind.sire] ? ind.sire : '.';
-    lines.push([ind.id, FAMILY_ID, sex, dam, sire].join('\t'));
-  });
-  return { tsv: lines.join('\n') + '\n', familyId: FAMILY_ID };
-}
-
-async function runMadelineLayout(tsv, familyId) {
-  if (typeof createMadeline !== 'function') {
-    throw new Error('madeline2.js が読み込まれていません(ファイルが同じフォルダにありますか？)');
-  }
-  // A fresh module per call: Madeline keeps pedigree state in C++
-  // globals/statics for the duration of one CLI run, so reusing one
-  // instance across multiple layouts would leak state between them.
-  var mod = await createMadeline({ print: function() {}, printErr: function() {} });
-  mod.FS.writeFile('/in.data', tsv);
-  mod.callMain(['--outputext', 'svg', '/in.data']);
-  return mod.FS.readFile('/' + familyId + '_pedigree.svg', { encoding: 'utf8' });
-}
-
-// Madeline wraps its drawing in a <g transform="translate(...)"> whose
-// offset depends on the input (varies in magnitude AND sign — confirmed
-// against real output, not assumed), so raw x/y attributes are wrong by
-// exactly that offset. Inserting the SVG into the real DOM and reading
-// getScreenCTM() resolves whatever transform chain Madeline used without
-// having to parse or track it ourselves; centering on getBBox() also
-// folds rect's top-left origin and circle's center origin into one
-// consistent point per node.
-function extractPositionsFromSVG(svgText) {
-  var host = document.createElement('div');
-  host.style.cssText = 'position:absolute;visibility:hidden;left:-99999px;top:-99999px;';
-  host.innerHTML = svgText;
-  document.body.appendChild(host);
-  var svg = host.querySelector('svg');
-  var out = {};
-  if (!svg) { host.remove(); return out; }
-  var rootInv = svg.getScreenCTM().inverse();
-  svg.querySelectorAll('rect[id], circle[id]').forEach(function(el) {
-    var b = el.getBBox();
-    var m = rootInv.multiply(el.getScreenCTM());
-    var p = svg.createSVGPoint();
-    p.x = b.x + b.width / 2;
-    p.y = b.y + b.height / 2;
-    var q = p.matrixTransform(m);
-    out[el.id] = { x: q.x, y: q.y };
-  });
-  host.remove();
-  return out;
-}
-
-// Madeline sizes its own grid to its own icon/label metrics, so its raw
-// pixel spacing doesn't match our mouse artwork's size — snap each
-// coordinate to Madeline's logical grid index (nearest-neighbor gap = one
-// grid step) first, then re-space using our own PED_* constants.
-function snapToOwnGrid(rawPositions) {
-  function axisSteps(values) {
-    var uniq = values.slice().sort(function(a, b) { return a - b; })
-      .filter(function(v, i, arr) { return i === 0 || v - arr[i - 1] > 1; });
-    var pitch = Infinity;
-    for (var i = 1; i < uniq.length; i++) pitch = Math.min(pitch, uniq[i] - uniq[i - 1]);
-    if (!isFinite(pitch) || pitch <= 0) pitch = 1;
-    return { min: uniq.length ? uniq[0] : 0, pitch: pitch };
-  }
-  var ids = Object.keys(rawPositions);
-  var xAxis = axisSteps(ids.map(function(id) { return rawPositions[id].x; }));
-  var yAxis = axisSteps(ids.map(function(id) { return rawPositions[id].y; }));
-  var xStep = PED_NODE_W + PED_COL_GAP;
-  var out = {};
-  ids.forEach(function(id) {
-    var p = rawPositions[id];
-    var col = Math.round((p.x - xAxis.min) / xAxis.pitch);
-    var row = Math.round((p.y - yAxis.min) / yAxis.pitch);
-    out[id] = { x: col * xStep, y: row * PED_ROW_H };
-  });
-  return out;
-}
-
-async function pedLayoutFullViaMadeline() {
-  var built = individualsToMadelineTSV();
-  var svgText = await runMadelineLayout(built.tsv, built.familyId);
-  var rawPositions = extractPositionsFromSVG(svgText);
-  var positions = snapToOwnGrid(rawPositions);
-  var pairEdges = individuals.map(function(ind) {
-    var damIn = ind.dam && positions[ind.dam];
-    var sireIn = ind.sire && positions[ind.sire];
-    return { dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: ind.id };
-  }).filter(function(pe) { return (pe.dam || pe.sire) && positions[pe.child]; });
-  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
-}
-
-// ---- layout: one individual's ancestors/descendants, via Madeline ----
-//
-// Same idea as pedLayoutFullViaMadeline, scoped to a bounded neighborhood
-// instead of everyone. Ancestors are walked up to upDepth generations;
-// descendants down to downDepth, and each descendant's OTHER parent is
-// pulled in too (a child with two known parents shouldn't look like it
-// only had the one being viewed) — but that spouse's own further ancestry
-// is deliberately not expanded, matching the old single-individual view's
-// behavior. That boundary is enforced by feeding Madeline "." (unknown)
-// for a spouse-leaf's parents even where our data actually has them —
-// UNLESS that person also has a real inclusion path of their own
-// elsewhere in this same neighborhood (e.g. two shown relatives marry each
-// other), in which case their real parents are kept so Madeline can draw
-// that as the loop it actually is instead of hiding it.
-function individualToMadelineTSVSubset(rootId, upDepth, downDepth) {
-  var include = {}, leafOnly = {}, descSeen = {}, ancSeen = {};
-  function visitDown(id, depth) {
-    if (descSeen[id]) return;
-    descSeen[id] = true;
-    include[id] = true;
-    delete leafOnly[id];
-    if (depth <= 0) return;
-    children(id).forEach(function(k) {
-      visitDown(k.id, depth - 1);
-      var other = (k.dam === id) ? k.sire : k.dam;
-      if (other && byId[other] && !include[other]) {
-        include[other] = true;
-        leafOnly[other] = true;
-      }
-    });
-  }
-  function visitUp(id, depth) {
-    if (ancSeen[id]) return;
-    ancSeen[id] = true;
-    include[id] = true;
-    delete leafOnly[id];
-    if (depth <= 0) return;
-    var ind = byId[id];
-    if (ind.dam && byId[ind.dam]) visitUp(ind.dam, depth - 1);
-    if (ind.sire && byId[ind.sire]) visitUp(ind.sire, depth - 1);
-  }
-  visitUp(rootId, upDepth);
-  visitDown(rootId, downDepth);
-
-  var FAMILY_ID = 'IND';
-  var ids = Object.keys(include);
-  var effectiveParents = {};
-  var lines = ['Individualid\tFamilyid\tGender\tMother\tFather'];
-  ids.forEach(function(id) {
-    var ind = byId[id];
-    var sex = ind.sex === 'F' ? 'f' : ind.sex === 'M' ? 'm' : '.';
-    var dam = null, sire = null;
-    if (!leafOnly[id]) {
-      if (ind.dam && include[ind.dam]) dam = ind.dam;
-      if (ind.sire && include[ind.sire]) sire = ind.sire;
-    }
-    effectiveParents[id] = { dam: dam, sire: sire };
-    lines.push([id, FAMILY_ID, sex, dam || '.', sire || '.'].join('\t'));
-  });
-  return { tsv: lines.join('\n') + '\n', familyId: FAMILY_ID, ids: ids, effectiveParents: effectiveParents };
-}
-
-async function pedLayoutIndividualViaMadeline(rootId, upDepth, downDepth) {
-  var built = individualToMadelineTSVSubset(rootId, upDepth, downDepth);
-  if (built.ids.length <= 1) {
-    return { positions: {}, pairEdges: [], rootId: rootId, isolated: true };
-  }
-  var svgText = await runMadelineLayout(built.tsv, built.familyId);
-  var positions = snapToOwnGrid(extractPositionsFromSVG(svgText));
-  var pairEdges = built.ids.map(function(id) {
-    var p = built.effectiveParents[id];
-    var damIn = p.dam && positions[p.dam];
-    var sireIn = p.sire && positions[p.sire];
-    return { dam: damIn ? p.dam : null, sire: sireIn ? p.sire : null, child: id };
-  }).filter(function(pe) { return (pe.dam || pe.sire) && positions[pe.child]; });
-  return { positions: positions, pairEdges: pairEdges, rootId: rootId, isolated: false };
-}
-
-// ---- layout: a single dam x sire pair plus their shared children, via
-// ---- Madeline (kept simple — it's already a bounded, unambiguous shape) ----
-async function pedLayoutCrossViaMadeline(dam, sire) {
-  var kids = individuals.filter(function(ind) { return dam && sire && ind.dam === dam && ind.sire === sire; });
-  var FAMILY_ID = 'CROSS';
-  var lines = ['Individualid\tFamilyid\tGender\tMother\tFather'];
-  if (dam && byId[dam]) lines.push([dam, FAMILY_ID, 'f', '.', '.'].join('\t'));
-  if (sire && byId[sire]) lines.push([sire, FAMILY_ID, 'm', '.', '.'].join('\t'));
-  kids.forEach(function(k) {
-    var sex = k.sex === 'F' ? 'f' : k.sex === 'M' ? 'm' : '.';
-    lines.push([k.id, FAMILY_ID, sex, dam, sire].join('\t'));
-  });
-  var svgText = await runMadelineLayout(lines.join('\n') + '\n', FAMILY_ID);
-  var positions = snapToOwnGrid(extractPositionsFromSVG(svgText));
-  var pairEdges = kids.map(function(k) { return { dam: dam, sire: sire, child: k.id }; })
-    .filter(function(pe) { return positions[pe.child]; });
-  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
-}
-
 // ---- layout: entire database (topological rank + a light barycenter pass) ----
-// Fallback for pedLayoutFullViaMadeline (e.g. madeline2.wasm failed to load)
-// — same shared-parent duplicate-instance handling, kept for that case only.
 //
 // Follows the McGoldrick-Gerson genogram convention for anyone with more
 // than one mate (as used by pedigreejs, github.com/CCGE-BOADICEA/pedigreejs,
@@ -1558,7 +1338,7 @@ function pedLayoutFull() {
 // box used for a single individual's ancestor/descendant view, rather than a
 // separate panel. Reuses selectIndividual() to populate the rest of the
 // detail card (using dam as the anchor), then overrides just the diagram box.
-async function showCrossMermaid(dam, sire) {
+function showCrossMermaid(dam, sire) {
   var anchorId = (dam && byId[dam]) ? dam : sire;
   if (!anchorId) return;
   selectIndividual(anchorId);
@@ -1568,29 +1348,14 @@ async function showCrossMermaid(dam, sire) {
   var container = document.getElementById('mermaidIndividual');
   if (title) title.textContent = '系図図 — ' + (dam || '?') + ' × ' + (sire || '?');
   if (toolbar) toolbar.style.display = 'none';
-  if (container) {
-    container.innerHTML = '<span class="muted">描画中...</span>';
-    try {
-      pedRenderLayout(container, await pedLayoutCrossViaMadeline(dam, sire));
-    } catch (e) {
-      console.error('Madeline layout failed, falling back to built-in layout:', e);
-      pedRenderLayout(container, pedLayoutCross(dam, sire));
-    }
-  }
+  if (container) pedRenderLayout(container, pedLayoutCross(dam, sire));
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-async function renderIndividualMermaid(rootId, upDepth, downDepth) {
+function renderIndividualMermaid(rootId, upDepth, downDepth) {
   var container = document.getElementById('mermaidIndividual');
   if (!container) return;
-  container.innerHTML = '<span class="muted">描画中...</span>';
-  var layout;
-  try {
-    layout = await pedLayoutIndividualViaMadeline(rootId, upDepth, downDepth);
-  } catch (e) {
-    console.error('Madeline layout failed, falling back to built-in layout:', e);
-    layout = pedLayoutIndividual(rootId, upDepth, downDepth);
-  }
+  var layout = pedLayoutIndividual(rootId, upDepth, downDepth);
   container.innerHTML = '';
   if (layout.isolated) {
     var note = document.createElement('div');
@@ -1684,19 +1449,13 @@ document.querySelectorAll('#crossTable th').forEach(function(th) {
 });
 
 // ---- full pedigree diagram ----
-document.getElementById('showFullMermaidBtn').onclick = async function() {
+document.getElementById('showFullMermaidBtn').onclick = function() {
   var container = document.getElementById('mermaidFull');
   container.style.display = 'block';
-  container.innerHTML = '<span class="muted">描画中...(Madelineエンジンで配置計算中、個体数が多いため数秒かかることがあります)</span>';
-  await new Promise(function(r) { setTimeout(r, 30); });
-  try {
-    var layout = await pedLayoutFullViaMadeline();
-    pedRenderLayout(container, layout);
-  } catch (e) {
-    console.error('Madeline layout failed, falling back to built-in layout:', e);
-    container.innerHTML = '<div class="muted" style="color:#a30000">Madelineエンジンでの配置に失敗したため、簡易レイアウトで表示します(' + e.message + ')</div>';
+  container.innerHTML = '<span class="muted">描画中...(個体数が多いため数秒かかることがあります)</span>';
+  setTimeout(function() {
     pedRenderLayout(container, pedLayoutFull());
-  }
+  }, 30);
 };
 
 // ---- load data from Excel ----
