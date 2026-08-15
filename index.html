@@ -1,0 +1,1232 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>マウス系図・サンプル検索ツール</title>
+<script src="./xlsx.full.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card-bg: #ffffff;
+    --border: #dde1e6;
+    --text: #1f2430;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-bg: #eaf1ff;
+    --female: #d6336c;
+    --male: #1c7ed6;
+    --warn-bg: #fff4e5;
+    --warn-border: #f0b429;
+    --tag-bg: #eef0f3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Hiragino Sans", "Meiryo", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .layout > .panel { min-width: 0; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+  .panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .search-box {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 15px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    outline: none;
+  }
+  .search-box:focus { border-color: var(--accent); }
+  .filters { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .filter-chip {
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--tag-bg);
+    cursor: pointer;
+    color: var(--muted);
+    user-select: none;
+  }
+  .filter-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .result-list { margin-top: 14px; max-height: 60vh; overflow-y: auto; }
+  .result-item {
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .result-item:hover { background: var(--accent-bg); }
+  .result-item.selected { background: var(--accent-bg); font-weight: 600; }
+  .sex-badge {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 18px;
+    font-size: 11px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .sex-F { background: var(--female); }
+  .sex-M { background: var(--male); }
+  .sex-unknown { background: #9aa1ac; }
+  .id-mono { font-family: "Consolas", monospace; }
+  .muted { color: var(--muted); }
+  .empty-state { color: var(--muted); font-size: 13px; padding: 30px 10px; text-align: center; }
+
+  .detail-header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .detail-header .idname { font-size: 24px; font-weight: 700; }
+  .tag {
+    font-size: 11px;
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 10px;
+    color: var(--muted);
+  }
+  .uncertain-banner {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    margin-top: 10px;
+  }
+  .field-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .field {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .field .label { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .field .value { font-size: 15px; font-weight: 600; }
+  .field.highlight { background: var(--accent-bg); border-color: var(--accent); }
+  .field.highlight .value { color: var(--accent); }
+
+  .section-title { font-size: 13px; font-weight: 700; margin: 22px 0 8px; color: var(--text); }
+  .desc-link {
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .desc-link:hover { background: var(--accent-bg); }
+
+  .status-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .status-tag {
+    font-size: 11px;
+    background: #fff7e6;
+    border: 1px solid #ffd97a;
+    color: #8a5a00;
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+  .status-tag.uncertain { background: #ffe8e8; border-color: #ffaeae; color: #a30000; }
+
+  table.browse { border-collapse: collapse; font-size: 12px; }
+  table.browse th, table.browse td { border-bottom: 1px solid var(--border); padding: 6px 10px; text-align: left; white-space: nowrap; }
+  table.browse th { position: sticky; top: 0; background: var(--card-bg); cursor: pointer; }
+  table.browse tr:hover td { background: var(--accent-bg); cursor: pointer; }
+  .browse-wrap { max-height: 340px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; margin-top: 10px; }
+
+  .top-note {
+    font-size: 12px;
+    color: var(--muted);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+  }
+  .top-note a { color: var(--accent); }
+
+  .btn {
+    display: inline-block;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+    cursor: pointer;
+    user-select: none;
+  }
+  .btn:hover { background: var(--accent); color: #fff; }
+  .btn.secondary { border-color: var(--border); background: var(--tag-bg); color: var(--text); }
+  .btn.secondary:hover { background: var(--border); color: var(--text); }
+
+  .mermaid-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .mermaid-toolbar label { font-size: 12px; color: var(--muted); }
+  .mermaid-wrap {
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    padding: 12px;
+    max-height: 70vh;
+    cursor: grab;
+    scrollbar-width: auto;
+  }
+  .mermaid-wrap.dragging { cursor: grabbing; user-select: none; }
+  .mermaid-wrap svg { max-width: none !important; }
+  .mermaid-wrap::-webkit-scrollbar { height: 14px; width: 14px; }
+  .mermaid-wrap::-webkit-scrollbar-track { background: var(--bg); }
+  .mermaid-wrap::-webkit-scrollbar-thumb { background: #b7bec9; border-radius: 7px; border: 3px solid var(--bg); }
+  .mermaid-wrap::-webkit-scrollbar-thumb:hover { background: #98a1ad; }
+  .depth-input { width: 46px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; }
+  .isolated-note { font-size: 12px; color: #a30000; background: #ffe8e8; border: 1px solid #ffaeae; border-radius: 6px; padding: 6px 10px; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div id="toast" style="display:none; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#1f2430; color:#fff; padding:8px 16px; border-radius:8px; font-size:13px; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.2);"></div>
+
+<h1>マウス系図・サンプル検索ツール</h1>
+<div class="subtitle">個体マスターExcel(マウス系図_個体マスター.xlsx)を読み込んで表示する、検索・系図可視化専用ツールです。データの追加・修正はExcel側で行ってください。</div>
+
+<div class="top-note" id="dataToolbar" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+  <span id="dataStatus">📂 Excelファイルを選択してください</span>
+  <label class="btn" style="cursor:pointer;" id="dataFileLabel">
+    Excelファイルを選択して読み込む(.xlsx / .xlsm)
+    <input type="file" id="dataFileInput" accept=".xlsx,.xlsm" style="display:none;">
+  </label>
+  <a href="./使い方.html" target="_blank">使い方ガイドを見る</a>
+</div>
+
+<div id="loadError" class="top-note" style="display:none; background:#ffe8e8; border-color:#ffaeae;"></div>
+
+<div class="layout">
+  <div class="panel">
+    <div style="display:flex; gap:6px;">
+      <select id="searchFieldSelect" class="search-box" style="width:auto; flex:0 0 auto;">
+        <option value="id" selected>個体ID</option>
+        <option value="dam">母ID</option>
+        <option value="sire">父ID</option>
+        <option value="litter">産仔</option>
+        <option value="rnalater">RNALater保管場所</option>
+        <option value="tube_no">チューブ番号</option>
+        <option value="strain_note">系統メモ</option>
+        <option value="status">状態</option>
+        <option value="remark">備考</option>
+      </select>
+      <input type="text" id="searchBox" class="search-box" style="flex:1 1 auto;" placeholder="キーワードを入力" autocomplete="off">
+    </div>
+    <div class="filters" id="filterChips"></div>
+    <div class="result-list" id="resultList"></div>
+  </div>
+
+  <div class="panel" id="detailPanel">
+    <div class="empty-state">上のボタンからExcelファイルを読み込むと、ここに検索結果が表示されます。</div>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:20px;">
+  <div class="section-title" style="margin-top:0;">交配ペア記録一覧</div>
+  <div class="muted" style="font-size:12px; margin-top:-4px; margin-bottom:8px;">行をクリックすると、母×父を横につないだ系図にジャンプします。</div>
+  <div class="browse-wrap">
+    <table class="browse" id="crossTable">
+      <thead>
+        <tr>
+          <th data-key="dam">母ID</th>
+          <th data-key="sire">父ID</th>
+          <th data-key="birth_date">出産日</th>
+          <th data-key="gestation_days">妊娠日数</th>
+          <th data-key="litter_size">産仔数</th>
+          <th data-key="rnalater">RNALater箱</th>
+          <th data-key="note">備考</th>
+        </tr>
+      </thead>
+      <tbody id="crossBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:20px;">
+  <div class="section-title" style="margin-top:0;">全個体一覧</div>
+  <div class="browse-wrap">
+    <table class="browse" id="browseTable">
+      <thead>
+        <tr>
+          <th data-key="id">ID</th>
+          <th data-key="sex">性別</th>
+          <th data-key="dam">母</th>
+          <th data-key="sire">父</th>
+          <th data-key="litter">産仔</th>
+          <th data-key="birth_date">出生日</th>
+          <th data-key="dissection_date">解剖日</th>
+          <th data-key="rnalater">RNALater</th>
+          <th data-key="status">状態</th>
+        </tr>
+      </thead>
+      <tbody id="browseBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="panel" style="margin-top:20px;">
+  <div class="section-title" style="margin-top:0;">全体系図</div>
+  <div class="mermaid-toolbar">
+    <span class="muted" style="font-size:12px;">全個体を一度に描画します。個体数が多いとブラウザが重くなる場合があります。</span>
+    <span class="btn" id="showFullMermaidBtn">全体を描画する</span>
+  </div>
+  <div class="mermaid-wrap" id="mermaidFull" style="display:none;"></div>
+</div>
+
+
+<script>
+// This tool is display-only. All data comes from the Excel master workbook,
+// selected via the file picker below (parsed client-side with SheetJS) —
+// there is no editing here and nothing is written back to any file.
+let individuals = [];
+let byId = {};
+let crosses = [];
+let lastUpDepth = 1;
+let lastDownDepth = 1;
+
+function children(id) {
+  return individuals.filter(function(ind) { return ind.dam === id || ind.sire === id; });
+}
+
+function sexBadge(sex) {
+  if (sex === 'F') return '<span class="sex-badge sex-F">♀</span>';
+  if (sex === 'M') return '<span class="sex-badge sex-M">♂</span>';
+  return '<span class="sex-badge sex-unknown">?</span>';
+}
+
+function fmtDate(d) {
+  return d ? d : '<span class="muted">-</span>';
+}
+
+function statusHtml(status) {
+  if (!status || !status.length) return '';
+  return '<div class="status-tags">' + status.map(function(s) {
+    var uncertain = s.indexOf('要確認') >= 0;
+    return '<span class="status-tag' + (uncertain ? ' uncertain' : '') + '">' + s + '</span>';
+  }).join('') + '</div>';
+}
+
+// ---- search list ----
+const resultList = document.getElementById('resultList');
+const searchBox = document.getElementById('searchBox');
+let activeFilter = null;
+
+const FILTERS = [
+  {key: 'has_rnalater', label: 'RNALaterあり', test: function(i){ return !!i.rnalater; }},
+  {key: 'frozen', label: '凍結あり', test: function(i){ return (i.status||[]).some(function(s){ return s.indexOf('凍結')>=0; }); }},
+  {key: 'uncertain', label: '要確認', test: function(i){ return (i.status||[]).some(function(s){ return s.indexOf('要確認')>=0; }); }},
+  {key: 'no_litter_date', label: '産仔日不明', test: function(i){ return !i.birth_date; }},
+];
+const filterChips = document.getElementById('filterChips');
+FILTERS.forEach(function(f) {
+  var chip = document.createElement('div');
+  chip.className = 'filter-chip';
+  chip.textContent = f.label;
+  chip.onclick = function() {
+    activeFilter = (activeFilter === f.key) ? null : f.key;
+    document.querySelectorAll('.filter-chip').forEach(function(c){ c.classList.remove('active'); });
+    if (activeFilter) chip.classList.add('active');
+    renderList();
+  };
+  filterChips.appendChild(chip);
+});
+
+const searchFieldSelect = document.getElementById('searchFieldSelect');
+
+function searchFieldValue(ind, field) {
+  if (field === 'status') return (ind.status || []).join(' ');
+  var v = ind[field];
+  return v == null ? '' : String(v);
+}
+
+function renderList() {
+  var q = searchBox.value.trim().toUpperCase();
+  var field = searchFieldSelect.value;
+  var filterFn = FILTERS.find(function(f){ return f.key === activeFilter; });
+  var items = individuals.filter(function(ind) {
+    var matchQ = !q || searchFieldValue(ind, field).toUpperCase().indexOf(q) >= 0;
+    var matchF = !filterFn || filterFn.test(ind);
+    return matchQ && matchF;
+  });
+  resultList.innerHTML = '';
+  if (!items.length) {
+    resultList.innerHTML = '<div class="empty-state">該当なし</div>';
+    return;
+  }
+  items.slice(0, 300).forEach(function(ind) {
+    var el = document.createElement('div');
+    el.className = 'result-item';
+    el.innerHTML = '<span>' + sexBadge(ind.sex) + ' <span class="id-mono">' + ind.id + '</span></span>' +
+      '<span class="muted">' + (ind.rnalater ? ind.rnalater : (ind.dissection_date || '')) + '</span>';
+    el.onclick = function() { selectIndividual(ind.id); };
+    resultList.appendChild(el);
+  });
+}
+searchBox.addEventListener('input', renderList);
+searchFieldSelect.addEventListener('change', renderList);
+
+// ---- detail panel ----
+
+function selectIndividual(id) {
+  var ind = byId[id];
+  var panel = document.getElementById('detailPanel');
+  if (!ind) {
+    panel.innerHTML = '<div class="empty-state">ID "' + id + '" は見つかりませんでした。</div>';
+    return;
+  }
+
+  document.querySelectorAll('.result-item').forEach(function(el){ el.classList.remove('selected'); });
+
+  var html = '';
+  html += '<div class="detail-header">';
+  html += sexBadge(ind.sex) + '<span class="idname id-mono">' + ind.id + '</span>';
+  if (ind.litter) html += '<span class="tag">' + ind.litter + '</span>';
+  if (ind.page) html += '<span class="tag">元PDF p.' + ind.page + '</span>';
+  html += '</div>';
+  html += statusHtml(ind.status);
+
+  html += '<div class="field-grid">';
+  html += '<div class="field"><div class="label">母 (dam)</div><div class="value">' + (ind.dam ? '<span class="desc-link" data-id="'+ind.dam+'">'+ind.dam+'</span>' : '-') + '</div></div>';
+  html += '<div class="field"><div class="label">父 (sire)</div><div class="value">' + (ind.sire ? '<span class="desc-link" data-id="'+ind.sire+'">'+ind.sire+'</span>' : '-') + '</div></div>';
+  html += '<div class="field"><div class="label">出生日</div><div class="value">' + fmtDate(ind.birth_date) + '</div></div>';
+  html += '<div class="field"><div class="label">解剖日</div><div class="value">' + fmtDate(ind.dissection_date) + '</div></div>';
+  if (ind.rnalater) {
+    html += '<div class="field highlight"><div class="label">RNALater保管場所</div><div class="value">' + ind.rnalater + '</div></div>';
+  }
+  if (ind.tube_no) {
+    html += '<div class="field highlight"><div class="label">チューブ番号</div><div class="value">' + ind.tube_no + '</div></div>';
+  }
+  if (ind.tissue) html += '<div class="field"><div class="label">組織</div><div class="value">' + ind.tissue + '</div></div>';
+  if (ind.strain_note) html += '<div class="field"><div class="label">系統メモ</div><div class="value" style="font-size:12px;">' + ind.strain_note + '</div></div>';
+  html += '</div>';
+
+  if (!ind.rnalater && !ind.tube_no) {
+    html += '<div class="uncertain-banner">この個体には保管場所の記載が見つかりませんでした(未解剖、または原本判読不可の可能性)。</div>';
+  }
+
+  // pedigree subtree
+  html += '<div class="section-title" id="mermaidSectionTitle">系図図 — ' + ind.id + ' 中心</div>';
+  html += '<div class="mermaid-toolbar" id="mermaidToolbar">';
+  html += '<label>祖先 世代数 <input type="number" id="upDepth" class="depth-input" min="0" max="100" value="' + lastUpDepth + '"></label>';
+  html += '<label>子孫 世代数 <input type="number" id="downDepth" class="depth-input" min="0" max="100" value="' + lastDownDepth + '"></label>';
+  html += '</div>';
+  html += '<div class="mermaid-wrap" id="mermaidIndividual"><span class="muted">描画中...</span></div>';
+
+  panel.innerHTML = html;
+
+  panel.querySelectorAll('.desc-link').forEach(function(el) {
+    el.onclick = function() { selectIndividual(el.getAttribute('data-id')); };
+  });
+
+  document.querySelectorAll('.result-item').forEach(function(el) {
+    if (el.textContent.indexOf(id) >= 0) el.classList.add('selected');
+  });
+
+  var redrawFn = function() {
+    var up = parseInt(document.getElementById('upDepth').value, 10) || 0;
+    var down = parseInt(document.getElementById('downDepth').value, 10) || 0;
+    lastUpDepth = up;
+    lastDownDepth = down;
+    renderIndividualMermaid(ind.id, up, down);
+  };
+  document.getElementById('upDepth').addEventListener('input', redrawFn);
+  document.getElementById('downDepth').addEventListener('input', redrawFn);
+  redrawFn();
+}
+
+// Clicking a node in any pedigree diagram copies that individual's info to the
+// clipboard (tab-separated, pastes as a row into Excel) and re-centers the view on it.
+function individualToTsv(ind) {
+  var headers = ['ID','性別','母ID','父ID','産仔','出生日','解剖日','RNALater保管場所','チューブ番号','組織','系統メモ','状態','元PDFページ','備考'];
+  var sexLabel = ind.sex === 'F' ? '♀' : (ind.sex === 'M' ? '♂' : '不明');
+  var values = [
+    ind.id, sexLabel, ind.dam || '', ind.sire || '', ind.litter || '',
+    ind.birth_date || '', ind.dissection_date || '', ind.rnalater || '',
+    ind.tube_no || '', ind.tissue || '', ind.strain_note || '',
+    (ind.status || []).join(', '), ind.page != null ? ind.page : '', ind.remark || ''
+  ];
+  return headers.join('\t') + '\n' + values.join('\t');
+}
+
+function copyTextToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).catch(function() { copyTextFallback(text); });
+  } else {
+    copyTextFallback(text);
+  }
+}
+
+function copyTextFallback(text) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  var el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function() { el.style.display = 'none'; }, 1800);
+}
+
+function mermaidGoTo(id) {
+  var ind = byId[id];
+  if (ind) {
+    copyTextToClipboard(individualToTsv(ind));
+    showToast('📋 ' + id + ' の情報をコピーしました');
+  }
+  selectIndividual(id);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Click-and-drag panning for .mermaid-wrap containers (diagrams are often much
+// wider/taller than the box, e.g. the full pedigree). A capturing click handler
+// suppresses the click (and so mermaidGoTo) when the mousedown->mouseup was
+// actually a drag, so panning and node-clicking don't interfere with each other.
+(function() {
+  var drag = null;
+  var didDrag = false;
+  document.addEventListener('mousedown', function(e) {
+    var wrap = e.target.closest('.mermaid-wrap');
+    if (!wrap) return;
+    drag = { wrap: wrap, startX: e.pageX, startY: e.pageY, scrollLeft: wrap.scrollLeft, scrollTop: wrap.scrollTop };
+    didDrag = false;
+    wrap.classList.add('dragging');
+  });
+  document.addEventListener('mousemove', function(e) {
+    if (!drag) return;
+    var dx = e.pageX - drag.startX;
+    var dy = e.pageY - drag.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didDrag = true;
+    drag.wrap.scrollLeft = drag.scrollLeft - dx;
+    drag.wrap.scrollTop = drag.scrollTop - dy;
+  });
+  document.addEventListener('mouseup', function() {
+    if (drag) { drag.wrap.classList.remove('dragging'); drag = null; }
+  });
+  document.addEventListener('click', function(e) {
+    if (didDrag) {
+      e.stopPropagation();
+      e.preventDefault();
+      didDrag = false;
+    }
+  }, true);
+
+  // Touch equivalent. .mermaid-wrap already scrolls natively on touch (it's
+  // a plain overflow:auto box), so this doesn't move scrollLeft/scrollTop
+  // itself — it only tracks whether the touch moved enough to count as a
+  // drag, reusing the same didDrag flag so a pan gesture doesn't also fire
+  // mermaidGoTo on whatever node the finger started/lifted on.
+  document.addEventListener('touchstart', function(e) {
+    var wrap = e.target.closest('.mermaid-wrap');
+    if (!wrap || e.touches.length !== 1) return;
+    var t = e.touches[0];
+    drag = { wrap: wrap, startX: t.pageX, startY: t.pageY, scrollLeft: wrap.scrollLeft, scrollTop: wrap.scrollTop };
+    didDrag = false;
+  }, { passive: true });
+  document.addEventListener('touchmove', function(e) {
+    if (!drag || !e.touches.length) return;
+    var t = e.touches[0];
+    var dx = t.pageX - drag.startX;
+    var dy = t.pageY - drag.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) didDrag = true;
+  }, { passive: true });
+  document.addEventListener('touchend', function() {
+    drag = null;
+  }, { passive: true });
+})();
+
+// ============================================================
+// Custom SVG pedigree renderer (no diagramming library). All coordinates are
+// computed by us, so parent-bars/sibling-bars are exact single polylines
+// (horizontal+vertical segments only, meeting at exact shared points) — no
+// generic graph-layout engine to fight for pedigree-chart conventions.
+// ============================================================
+const PED_NODE_W = 172;
+const PED_NODE_H = 96;
+const PED_COL_GAP = 40;
+const PED_ROW_H = 200;
+const PED_UNION_GAP = 24;
+// Kept clearly larger than a coincidental gap could be mistaken for a broken
+// line: a couple's parent-connector bar and their sibling bar sit only
+// PED_SIB_GAP apart, and a child column can coincidentally land at the same x
+// as one of its own parents (whose own drop stops at the connector bar) —
+// if the two bars were close together that reads as one cut-off line rather
+// than two distinct bars.
+const PED_SIB_GAP = 40;
+const PED_MIN_DROP = 28; // guaranteed straight run between the sibling bar and a child, so the arrowhead never touches the bar
+const PED_HOP_R = 15; // radius of the little "bridge" arc a vertical line draws when it crosses an unrelated horizontal line
+const PED_COLORS = {
+  F: { fill: '#ffe3ec', shade: '#ffc2d9', stroke: '#d6336c' },
+  M: { fill: '#e3f0ff', shade: '#bfe0ff', stroke: '#1c7ed6' },
+  unknown: { fill: '#eee', shade: '#d6d6d6', stroke: '#999' },
+};
+
+function pedColor(ind) {
+  return PED_COLORS[ind.sex] || PED_COLORS.unknown;
+}
+
+function pedLabelLines(ind) {
+  var sexSym = ind.sex === 'F' ? '♀' : (ind.sex === 'M' ? '♂' : '?');
+  var lines = ['🐭 ' + ind.id + ' ' + sexSym];
+  if (ind.litter || ind.birth_date) lines.push([ind.litter, ind.birth_date].filter(Boolean).join(' '));
+  if (ind.rnalater) lines.push('RNALater ' + ind.rnalater);
+  if (ind.tube_no) lines.push('tube ' + ind.tube_no);
+  if (ind.dissection_date) lines.push('解 ' + ind.dissection_date);
+  return lines;
+}
+
+function svgEl(tag, attrs) {
+  var el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  if (attrs) Object.keys(attrs).forEach(function(k) { el.setAttribute(k, attrs[k]); });
+  return el;
+}
+
+function pedPathEl(d) {
+  return svgEl('path', { d: d, fill: 'none', stroke: '#333', 'stroke-width': 2 });
+}
+
+// Draws parent(s)->child(ren) connectors. Children sharing the same dam+sire
+// (or the same lone known parent) are grouped so the whole group shares ONE
+// computed trunkX/trunkTopY/siblingBarY, and the shared trunk+bar is drawn
+// exactly once — that's what keeps the sibling bar a single unbroken line
+// instead of one independently-jogged (and re-overlapped) line per child.
+// A couple's two drop-lines are computed to meet at the exact midpoint
+// between dam and sire, so there's no separate "union node" to draw or hide:
+// the lines simply touch at that point by construction.
+//
+// In dense diagrams (the full-database view) unrelated bars/trunks can end up
+// crossing. Rather than let two unrelated lines just overlap ambiguously, any
+// vertical segment that crosses a horizontal segment from a DIFFERENT family
+// group is drawn with a small semicircular "bridge" hop over it, matching the
+// usual circuit-diagram convention for "these two lines do not connect".
+function pedDrawFamilyEdges(svg, positions, pairEdges) {
+  var groups = {};
+  var order = [];
+  pairEdges.forEach(function(pe) {
+    var key = pe.dam && pe.sire ? ('c:' + pe.dam + '|' + pe.sire) : ('s:' + (pe.dam || pe.sire));
+    if (!groups[key]) { groups[key] = []; order.push(key); }
+    groups[key].push(pe);
+  });
+
+  var hSegs = []; // {x1,x2,y,key} — drawn straight
+  var vSegs = []; // {x,y1,y2,key,arrow} — drawn with hops over foreign hSegs
+
+  order.forEach(function(key) {
+    var group = groups[key];
+    var pe0 = group[0];
+    var childPts = group.map(function(pe) { return positions[pe.child]; }).filter(Boolean);
+    if (!childPts.length) return;
+    var trunkX, trunkTopY, trunkDrawStartY;
+    if (pe0.dam && pe0.sire) {
+      var damPos = positions[pe0.dam], sirePos = positions[pe0.sire];
+      if (!damPos || !sirePos) return;
+      trunkX = (damPos.x + sirePos.x) / 2;
+      var barY = Math.max(damPos.y, sirePos.y) + PED_NODE_H / 2 + PED_UNION_GAP;
+      vSegs.push({ x: damPos.x, y1: damPos.y + PED_NODE_H / 2, y2: barY, key: key });
+      vSegs.push({ x: sirePos.x, y1: sirePos.y + PED_NODE_H / 2, y2: barY, key: key });
+      if (Math.abs(damPos.x - trunkX) > 0.5) hSegs.push({ x1: Math.min(damPos.x, trunkX), x2: Math.max(damPos.x, trunkX), y: barY, key: key });
+      if (Math.abs(sirePos.x - trunkX) > 0.5) hSegs.push({ x1: Math.min(sirePos.x, trunkX), x2: Math.max(sirePos.x, trunkX), y: barY, key: key });
+      trunkTopY = barY;
+      trunkDrawStartY = barY; // the connector bar (hSegs above) already visually arrives here
+    } else {
+      var onlyPos = positions[pe0.dam || pe0.sire];
+      if (!onlyPos) return;
+      trunkX = onlyPos.x;
+      // Same PED_UNION_GAP as the couple case above (even though there's no
+      // union to draw here) so every family's sibling bar in a given rank
+      // lands on the exact same y — otherwise a long vertical line passing
+      // through this rank would clip two nearly-but-not-quite-aligned bars
+      // and need two cramped, overlapping hops instead of one clean one.
+      trunkTopY = onlyPos.y + PED_NODE_H / 2 + PED_UNION_GAP;
+      // But there's no connector bar to visually carry the line down to that
+      // offset point, so the drawn segment must start at the node's actual
+      // bottom edge — otherwise it leaves a blank, unexplained gap right
+      // under the node before the line even begins.
+      trunkDrawStartY = onlyPos.y + PED_NODE_H / 2;
+    }
+    var childTopMinY = Math.min.apply(null, childPts.map(function(p) { return p.y - PED_NODE_H / 2; }));
+    var sibBarY = Math.min(trunkTopY + PED_SIB_GAP, childTopMinY - PED_MIN_DROP);
+    if (sibBarY < trunkTopY) sibBarY = trunkTopY;
+    vSegs.push({ x: trunkX, y1: trunkDrawStartY, y2: sibBarY, key: key });
+    var minChildX = trunkX, maxChildX = trunkX;
+    group.forEach(function(pe) {
+      var cp = positions[pe.child];
+      if (!cp) return;
+      minChildX = Math.min(minChildX, cp.x);
+      maxChildX = Math.max(maxChildX, cp.x);
+      vSegs.push({ x: cp.x, y1: sibBarY, y2: cp.y - PED_NODE_H / 2, key: key, arrow: true });
+    });
+    if (maxChildX - minChildX > 0.5) hSegs.push({ x1: minChildX, x2: maxChildX, y: sibBarY, key: key });
+  });
+
+  hSegs.forEach(function(h) {
+    svg.appendChild(pedPathEl('M' + h.x1 + ',' + h.y + ' L' + h.x2 + ',' + h.y));
+  });
+  vSegs.forEach(function(v) {
+    var crossings = [];
+    hSegs.forEach(function(h) {
+      if (h.key === v.key) return;
+      if (v.x > h.x1 + 0.5 && v.x < h.x2 - 0.5 && h.y > v.y1 + 0.5 && h.y < v.y2 - 0.5) crossings.push(Math.round(h.y));
+    });
+    crossings = crossings.filter(function(y, i) { return crossings.indexOf(y) === i; }).sort(function(a, b) { return a - b; });
+    // A couple's own union-connector bar and its (slightly lower) sibling bar
+    // are only ~PED_SIB_GAP apart, so a long line can clip both within a few
+    // pixels of each other. Two independent small hops there would overlap
+    // into a cramped squiggle, so nearby crossings are merged into one wider
+    // hop that clears the whole cluster in a single smooth arc.
+    var clusters = [];
+    crossings.forEach(function(cy) {
+      var last = clusters[clusters.length - 1];
+      if (last && cy - last.max <= PED_HOP_R * 3) last.max = cy;
+      else clusters.push({ min: cy, max: cy });
+    });
+    var d = 'M' + v.x + ',' + v.y1;
+    clusters.forEach(function(c) {
+      var r = (c.max - c.min) / 2 + PED_HOP_R;
+      var cy = (c.min + c.max) / 2;
+      d += ' L' + v.x + ',' + (cy - r) + ' A' + r + ',' + r + ' 0 0 1 ' + v.x + ',' + (cy + r);
+    });
+    d += ' L' + v.x + ',' + v.y2;
+    var p = pedPathEl(d);
+    if (v.arrow) p.setAttribute('marker-end', 'url(#pedArrowHead)');
+    svg.appendChild(p);
+  });
+}
+
+// Hand-drawn mouse decoration: two ears peeking over the top-right corner, a
+// curled tail off the left side, an eye + nose dot, and three short whiskers
+// on the right ("face" side) — kept one-sided rather than mirrored on both
+// sides, since symmetric whiskers on both edges reads as "cat", not "mouse".
+// Ear/eye/nose proportions follow a reference sketch (gemini-svg.svg): plain
+// circles clustered tight against the top-right corner, not spread wide.
+function pedDrawNode(svg, ind, x, y, isRoot, clickable) {
+  var g = svgEl('g', { class: 'ped-node' });
+  g.style.cursor = clickable ? 'pointer' : 'default';
+  var color = pedColor(ind);
+  var sexKey = (ind.sex === 'F' || ind.sex === 'M') ? ind.sex : 'unknown';
+  var hw = PED_NODE_W / 2, hh = PED_NODE_H / 2;
+  var strokeW = isRoot ? 4 : 2;
+
+  var tailD = 'M' + (x - hw) + ',' + (y + hh * 0.15)
+    + ' Q' + (x - hw - 22) + ',' + (y + hh * 0.55) + ' ' + (x - hw - 5) + ',' + (y + hh * 0.9)
+    + ' Q' + (x - hw - 22) + ',' + (y + hh * 0.95) + ' ' + (x - hw - 27) + ',' + (y + hh * 0.62);
+  g.appendChild(svgEl('path', { d: tailD, fill: 'none', stroke: color.stroke, 'stroke-width': 3, 'stroke-linecap': 'round' }));
+
+  g.appendChild(svgEl('circle', {
+    cx: x + hw * 0.57, cy: y - hh - hh * 0.15, r: hh * 0.28,
+    fill: color.shade, stroke: color.stroke, 'stroke-width': strokeW,
+  }));
+  g.appendChild(svgEl('circle', {
+    cx: x + hw * 0.82, cy: y - hh, r: hh * 0.34,
+    fill: color.fill, stroke: color.stroke, 'stroke-width': strokeW,
+  }));
+
+  g.appendChild(svgEl('rect', {
+    x: x - hw, y: y - hh, width: PED_NODE_W, height: PED_NODE_H,
+    rx: hh, ry: hh,
+    fill: 'url(#pedShade-' + sexKey + ')', stroke: color.stroke, 'stroke-width': strokeW,
+  }));
+
+  g.appendChild(svgEl('circle', { cx: x + hw * 0.75, cy: y - hh * 0.39, r: 3, fill: color.stroke }));
+
+  [-0.28, 0, 0.28].forEach(function(tilt) {
+    var wx = x + hw * 0.89, wy = y + tilt * 14;
+    g.appendChild(svgEl('line', {
+      x1: wx, y1: wy, x2: wx + 16, y2: wy + tilt * 10,
+      stroke: color.stroke, 'stroke-width': 1.5, 'stroke-linecap': 'round',
+    }));
+  });
+  var lines = pedLabelLines(ind);
+  var lineH = 16;
+  var text = svgEl('text', {
+    x: x, y: y - (lines.length - 1) * lineH / 2 + 4, 'text-anchor': 'middle', 'font-size': '12.5', fill: '#222',
+  });
+  lines.forEach(function(line, i) {
+    var tspan = svgEl('tspan', { x: x, dy: i === 0 ? 0 : lineH });
+    tspan.textContent = line;
+    text.appendChild(tspan);
+  });
+  g.appendChild(text);
+  if (clickable) g.addEventListener('click', function() { mermaidGoTo(ind.id); });
+  svg.appendChild(g);
+}
+
+function pedArrowDefs(svg) {
+  var defs = svgEl('defs');
+  var marker = svgEl('marker', {
+    id: 'pedArrowHead', viewBox: '0 0 10 10', refX: '9', refY: '5',
+    markerWidth: '8', markerHeight: '8', markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse',
+  });
+  marker.appendChild(svgEl('path', { d: 'M0,0 L10,5 L0,10 z', fill: '#333' }));
+  defs.appendChild(marker);
+  // Light-from-the-face-side shading for node bodies: lit near the whiskers
+  // (right), shaded toward the tail (left) — reinforces the side-profile
+  // read (see pedDrawNode) beyond just the ear/tail/whisker placement.
+  Object.keys(PED_COLORS).forEach(function(sex) {
+    var c = PED_COLORS[sex];
+    var grad = svgEl('linearGradient', { id: 'pedShade-' + sex, x1: '100%', y1: '0%', x2: '0%', y2: '100%' });
+    grad.appendChild(svgEl('stop', { offset: '0%', 'stop-color': c.fill }));
+    grad.appendChild(svgEl('stop', { offset: '100%', 'stop-color': c.shade }));
+    defs.appendChild(grad);
+  });
+  svg.appendChild(defs);
+}
+
+// Renders a computed layout ({positions:{id:{x,y}}, pairEdges, rootId}) into containerEl.
+function pedRenderLayout(containerEl, layout) {
+  containerEl.innerHTML = '';
+  var ids = Object.keys(layout.positions);
+  if (!ids.length) return;
+  var xs = ids.map(function(id) { return layout.positions[id].x; });
+  var ys = ids.map(function(id) { return layout.positions[id].y; });
+  var pad = 30;
+  var minX = Math.min.apply(null, xs) - PED_NODE_W / 2 - pad;
+  var maxX = Math.max.apply(null, xs) + PED_NODE_W / 2 + pad;
+  var minY = Math.min.apply(null, ys) - PED_NODE_H / 2 - pad;
+  var maxY = Math.max.apply(null, ys) + PED_NODE_H / 2 + pad;
+  var w = maxX - minX, h = maxY - minY;
+  var svg = svgEl('svg', { viewBox: minX + ' ' + minY + ' ' + w + ' ' + h, width: w, height: h });
+  pedArrowDefs(svg);
+  pedDrawFamilyEdges(svg, layout.positions, layout.pairEdges);
+  ids.forEach(function(id) {
+    var ind = byId[id];
+    if (!ind) return;
+    var pos = layout.positions[id];
+    pedDrawNode(svg, ind, pos.x, pos.y, id === layout.rootId, id !== layout.rootId);
+  });
+  containerEl.appendChild(svg);
+}
+
+// ---- layout: individual centered on rootId, ancestors above + descendants below ----
+function pedLayoutIndividual(rootId, upDepth, downDepth) {
+  var slotX = {};
+  var rank = {};
+  var nextLeaf = 0;
+
+  // Descendants first (post-order): leaves get sequential slots, each parent
+  // is centered over the span of its own children. This also fixes rootId's
+  // own slot, which the ancestor pass below then treats as a given anchor.
+  var descSeen = {};
+  function visitDown(id, depth, r) {
+    if (descSeen[id]) return;
+    descSeen[id] = true;
+    rank[id] = r;
+    var kids = depth > 0 ? children(id).slice().sort(function(a, b) {
+      return (a.birth_date || '').localeCompare(b.birth_date || '') || a.id.localeCompare(b.id);
+    }) : [];
+    if (!kids.length) {
+      slotX[id] = nextLeaf;
+      nextLeaf += 1;
+      return;
+    }
+    kids.forEach(function(k) { visitDown(k.id, depth - 1, r + 1); });
+    var xs = kids.map(function(k) { return slotX[k.id]; });
+    slotX[id] = (Math.min.apply(null, xs) + Math.max.apply(null, xs)) / 2;
+  }
+  visitDown(rootId, downDepth, 0);
+
+  // Ancestors: each visible ancestor's own further-ancestor subtree has a
+  // width (in slots); dam/sire are placed symmetrically around the child's
+  // already-fixed slot based on those widths, then recursed outward. Since
+  // this only ever anchors off rootId's own (already fixed) slot, it can't
+  // collide with the descendant side, which lives on the opposite side of
+  // rootId's row.
+  var widthMemo = {};
+  function ancestorWidth(id, depth) {
+    var key = id + '|' + depth;
+    if (widthMemo[key] != null) return widthMemo[key];
+    var ind = byId[id];
+    var dam = depth > 0 && ind && ind.dam && byId[ind.dam] ? ind.dam : null;
+    var sire = depth > 0 && ind && ind.sire && byId[ind.sire] ? ind.sire : null;
+    var w;
+    if (dam && sire) w = ancestorWidth(dam, depth - 1) + ancestorWidth(sire, depth - 1);
+    else if (dam) w = ancestorWidth(dam, depth - 1);
+    else if (sire) w = ancestorWidth(sire, depth - 1);
+    else w = 1;
+    widthMemo[key] = w;
+    return w;
+  }
+  var ancSeen = {};
+  function visitUp(id, depth, mySlot, r) {
+    if (ancSeen[id]) return;
+    ancSeen[id] = true;
+    rank[id] = r;
+    slotX[id] = mySlot;
+    if (depth <= 0) return;
+    var ind = byId[id];
+    var dam = ind && ind.dam && byId[ind.dam] ? ind.dam : null;
+    var sire = ind && ind.sire && byId[ind.sire] ? ind.sire : null;
+    if (dam && sire) {
+      var wDam = ancestorWidth(dam, depth - 1);
+      var wSire = ancestorWidth(sire, depth - 1);
+      var total = wDam + wSire;
+      visitUp(dam, depth - 1, mySlot - total / 2 + wDam / 2, r - 1);
+      visitUp(sire, depth - 1, mySlot + total / 2 - wSire / 2, r - 1);
+    } else if (dam) {
+      visitUp(dam, depth - 1, mySlot, r - 1);
+    } else if (sire) {
+      visitUp(sire, depth - 1, mySlot, r - 1);
+    }
+  }
+  visitUp(rootId, upDepth, slotX[rootId], 0);
+
+  var ids = Object.keys(rank);
+  var positions = {};
+  ids.forEach(function(id) {
+    positions[id] = { x: slotX[id] * (PED_NODE_W + PED_COL_GAP), y: rank[id] * PED_ROW_H };
+  });
+
+  var pairEdges = [];
+  ids.forEach(function(id) {
+    var ind = byId[id];
+    if (!ind) return;
+    var damIn = ind.dam && positions[ind.dam];
+    var sireIn = ind.sire && positions[ind.sire];
+    if (damIn || sireIn) pairEdges.push({ dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: id });
+  });
+
+  return { positions: positions, pairEdges: pairEdges, rootId: rootId, isolated: ids.length <= 1 };
+}
+
+// ---- layout: a single dam x sire pair plus their shared children ----
+function pedLayoutCross(dam, sire) {
+  var kids = individuals.filter(function(ind) { return dam && sire && ind.dam === dam && ind.sire === sire; })
+    .sort(function(a, b) { return (a.birth_date || '').localeCompare(b.birth_date || '') || a.id.localeCompare(b.id); });
+  var positions = {};
+  var step = PED_NODE_W + PED_COL_GAP;
+  kids.forEach(function(k, i) { positions[k.id] = { x: i * step, y: PED_ROW_H }; });
+  var centerX = kids.length > 0 ? (kids.length - 1) * step / 2 : 0;
+  if (dam && byId[dam]) positions[dam] = { x: centerX - step / 2, y: 0 };
+  if (sire && byId[sire]) positions[sire] = { x: centerX + step / 2, y: 0 };
+  var pairEdges = kids.map(function(k) { return { dam: dam, sire: sire, child: k.id }; });
+  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
+}
+
+// ---- layout: entire database (topological rank + a light barycenter pass) ----
+function pedLayoutFull() {
+  var rank = {};
+  var visiting = {};
+  function computeRank(id) {
+    if (rank[id] != null) return rank[id];
+    if (visiting[id]) return (rank[id] = 0); // defensive cycle guard
+    visiting[id] = true;
+    var ind = byId[id];
+    var r = 0;
+    if (ind) {
+      if (ind.dam && byId[ind.dam]) r = Math.max(r, computeRank(ind.dam) + 1);
+      if (ind.sire && byId[ind.sire]) r = Math.max(r, computeRank(ind.sire) + 1);
+    }
+    visiting[id] = false;
+    rank[id] = r;
+    return r;
+  }
+  individuals.forEach(function(ind) { computeRank(ind.id); });
+
+  var rows = {};
+  individuals.forEach(function(ind) { (rows[rank[ind.id]] = rows[rank[ind.id]] || []).push(ind.id); });
+  var rankNums = Object.keys(rows).map(Number).sort(function(a, b) { return a - b; });
+  var order = {};
+  rankNums.forEach(function(r) {
+    rows[r].sort();
+    rows[r].forEach(function(id, i) { order[id] = i; });
+  });
+
+  function parentIds(id) {
+    var ind = byId[id], out = [];
+    if (ind.dam && byId[ind.dam]) out.push(ind.dam);
+    if (ind.sire && byId[ind.sire]) out.push(ind.sire);
+    return out;
+  }
+  var childrenCache = {};
+  function childIds(id) {
+    if (!childrenCache[id]) childrenCache[id] = children(id).map(function(k) { return k.id; });
+    return childrenCache[id];
+  }
+  function barycenterPass(rs, getNeighbors) {
+    rs.forEach(function(r) {
+      var scored = rows[r].map(function(id) {
+        var neigh = getNeighbors(id).map(function(nid) { return order[nid]; }).filter(function(v) { return v != null; });
+        var score = neigh.length ? neigh.reduce(function(a, b) { return a + b; }, 0) / neigh.length : order[id];
+        return { id: id, score: score };
+      });
+      scored.sort(function(a, b) { return a.score - b.score; });
+      rows[r] = scored.map(function(s) { return s.id; });
+      rows[r].forEach(function(id, i) { order[id] = i; });
+    });
+  }
+  for (var iter = 0; iter < 2; iter++) {
+    barycenterPass(rankNums.slice(1), parentIds);
+    barycenterPass(rankNums.slice(0, -1).reverse(), childIds);
+  }
+
+  var positions = {};
+  var step = PED_NODE_W + PED_COL_GAP;
+  rankNums.forEach(function(r) {
+    rows[r].forEach(function(id, i) { positions[id] = { x: i * step, y: r * PED_ROW_H }; });
+  });
+
+  var pairEdges = individuals.map(function(ind) {
+    var damIn = ind.dam && byId[ind.dam];
+    var sireIn = ind.sire && byId[ind.sire];
+    return { dam: damIn ? ind.dam : null, sire: sireIn ? ind.sire : null, child: ind.id };
+  }).filter(function(pe) { return pe.dam || pe.sire; });
+
+  return { positions: positions, pairEdges: pairEdges, rootId: null, isolated: false };
+}
+
+// Shows the dam x sire pair (plus their children) inside the same "系図図"
+// box used for a single individual's ancestor/descendant view, rather than a
+// separate panel. Reuses selectIndividual() to populate the rest of the
+// detail card (using dam as the anchor), then overrides just the diagram box.
+function showCrossMermaid(dam, sire) {
+  var anchorId = (dam && byId[dam]) ? dam : sire;
+  if (!anchorId) return;
+  selectIndividual(anchorId);
+
+  var title = document.getElementById('mermaidSectionTitle');
+  var toolbar = document.getElementById('mermaidToolbar');
+  var container = document.getElementById('mermaidIndividual');
+  if (title) title.textContent = '系図図 — ' + (dam || '?') + ' × ' + (sire || '?');
+  if (toolbar) toolbar.style.display = 'none';
+  if (container) pedRenderLayout(container, pedLayoutCross(dam, sire));
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderIndividualMermaid(rootId, upDepth, downDepth) {
+  var container = document.getElementById('mermaidIndividual');
+  if (!container) return;
+  var layout = pedLayoutIndividual(rootId, upDepth, downDepth);
+  container.innerHTML = '';
+  if (layout.isolated) {
+    var note = document.createElement('div');
+    note.className = 'isolated-note';
+    note.textContent = 'この個体は原本から親・子の系統リンクを特定できませんでした(孤立ノード)。単独で表示します。';
+    container.appendChild(note);
+  }
+  var svgHolder = document.createElement('div');
+  container.appendChild(svgHolder);
+  pedRenderLayout(svgHolder, layout);
+}
+
+// ---- browse table ----
+const browseBody = document.getElementById('browseBody');
+let sortKey = 'id';
+let sortAsc = true;
+
+function renderTable() {
+  var rows = individuals.slice().sort(function(a, b) {
+    var av = a[sortKey] || '';
+    var bv = b[sortKey] || '';
+    if (sortKey === 'status') { av = (a.status||[]).join(','); bv = (b.status||[]).join(','); }
+    if (av < bv) return sortAsc ? -1 : 1;
+    if (av > bv) return sortAsc ? 1 : -1;
+    return 0;
+  });
+  browseBody.innerHTML = rows.map(function(ind) {
+    return '<tr data-id="' + ind.id + '">' +
+      '<td class="id-mono">' + ind.id + '</td>' +
+      '<td>' + sexBadge(ind.sex) + '</td>' +
+      '<td>' + (ind.dam || '-') + '</td>' +
+      '<td>' + (ind.sire || '-') + '</td>' +
+      '<td>' + (ind.litter || '-') + '</td>' +
+      '<td>' + (ind.birth_date || '-') + '</td>' +
+      '<td>' + (ind.dissection_date || '-') + '</td>' +
+      '<td>' + (ind.rnalater || ind.tube_no || '-') + '</td>' +
+      '<td>' + (ind.status && ind.status.length ? ind.status.join(' / ') : '-') + '</td>' +
+      '</tr>';
+  }).join('');
+  browseBody.querySelectorAll('tr').forEach(function(tr) {
+    tr.onclick = function() { selectIndividual(tr.getAttribute('data-id')); window.scrollTo({top:0, behavior:'smooth'}); };
+  });
+}
+document.querySelectorAll('#browseTable th').forEach(function(th) {
+  th.onclick = function() {
+    var key = th.getAttribute('data-key');
+    if (sortKey === key) sortAsc = !sortAsc; else { sortKey = key; sortAsc = true; }
+    renderTable();
+  };
+});
+
+// ---- cross (breeding pair) table ----
+const crossBody = document.getElementById('crossBody');
+let crossSortKey = 'dam';
+let crossSortAsc = true;
+
+function renderCrossTable() {
+  var rows = crosses.slice().sort(function(a, b) {
+    var av = a[crossSortKey];
+    var bv = b[crossSortKey];
+    av = av == null ? '' : av;
+    bv = bv == null ? '' : bv;
+    if (av < bv) return crossSortAsc ? -1 : 1;
+    if (av > bv) return crossSortAsc ? 1 : -1;
+    return 0;
+  });
+  crossBody.innerHTML = rows.map(function(c, i) {
+    return '<tr data-idx="' + i + '">' +
+      '<td class="id-mono">' + (c.dam || '-') + '</td>' +
+      '<td class="id-mono">' + (c.sire || '-') + '</td>' +
+      '<td>' + (c.birth_date || '-') + '</td>' +
+      '<td>' + (c.gestation_days != null ? c.gestation_days : '-') + '</td>' +
+      '<td>' + (c.litter_size != null ? c.litter_size : '-') + '</td>' +
+      '<td>' + (c.rnalater || '-') + '</td>' +
+      '<td>' + (c.note || '-') + '</td>' +
+      '</tr>';
+  }).join('');
+  crossBody.querySelectorAll('tr').forEach(function(tr) {
+    tr.onclick = function() {
+      var c = rows[Number(tr.getAttribute('data-idx'))];
+      showCrossMermaid(c.dam, c.sire);
+    };
+  });
+}
+document.querySelectorAll('#crossTable th').forEach(function(th) {
+  th.onclick = function() {
+    var key = th.getAttribute('data-key');
+    if (crossSortKey === key) crossSortAsc = !crossSortAsc; else { crossSortKey = key; crossSortAsc = true; }
+    renderCrossTable();
+  };
+});
+
+// ---- full pedigree diagram ----
+document.getElementById('showFullMermaidBtn').onclick = function() {
+  var container = document.getElementById('mermaidFull');
+  container.style.display = 'block';
+  container.innerHTML = '<span class="muted">描画中...(個体数が多いため数秒かかることがあります)</span>';
+  setTimeout(function() {
+    pedRenderLayout(container, pedLayoutFull());
+  }, 30);
+};
+
+// ---- load data from Excel ----
+function initWithData(data) {
+  individuals = data.individuals || [];
+  byId = {};
+  individuals.forEach(function(ind) { byId[ind.id] = ind; });
+  crosses = data.crosses || [];
+  renderList();
+  renderTable();
+  renderCrossTable();
+}
+
+function setDataStatus(text, isError) {
+  var el = document.getElementById('dataStatus');
+  el.textContent = text;
+  el.style.color = isError ? '#a30000' : '';
+}
+
+// ---- Excel (.xlsm/.xlsx) -> internal data shape, parsed client-side via SheetJS ----
+var SEX_FROM_JP = { '♀': 'F', '♂': 'M', '不明': 'unknown' };
+
+function cellStr(v) {
+  if (v === undefined || v === null) return null;
+  var s = String(v).trim();
+  return s === '' ? null : s;
+}
+
+function excelWorkbookToData(workbook) {
+  var wsInd = workbook.Sheets['個体マスター'];
+  var wsCross = workbook.Sheets['交配ペア記録'];
+  if (!wsInd) throw new Error('「個体マスター」シートが見つかりません');
+
+  var indRows = XLSX.utils.sheet_to_json(wsInd, { defval: null });
+  var inds = indRows.filter(function(r) { return cellStr(r['ID']); }).map(function(r) {
+    var statusRaw = cellStr(r['状態']);
+    return {
+      id: cellStr(r['ID']),
+      sex: SEX_FROM_JP[cellStr(r['性別'])] || cellStr(r['性別']),
+      dam: cellStr(r['母ID']),
+      sire: cellStr(r['父ID']),
+      litter: cellStr(r['産仔']),
+      birth_date: cellStr(r['出生日']),
+      dissection_date: cellStr(r['解剖日']),
+      rnalater: cellStr(r['RNALater保管場所']),
+      tube_no: cellStr(r['チューブ番号']),
+      tissue: cellStr(r['組織']),
+      strain_note: cellStr(r['系統メモ']),
+      status: statusRaw ? statusRaw.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [],
+      page: r['元PDFページ'] != null && r['元PDFページ'] !== '' ? Number(r['元PDFページ']) : null,
+      remark: cellStr(r['備考'])
+    };
+  });
+
+  var crosses = [];
+  if (wsCross) {
+    var crossRows = XLSX.utils.sheet_to_json(wsCross, { defval: null });
+    crosses = crossRows.filter(function(r) { return cellStr(r['母ID']); }).map(function(r) {
+      return {
+        dam: cellStr(r['母ID']),
+        sire: cellStr(r['父ID']),
+        birth_date: cellStr(r['出産日']),
+        gestation_days: r['妊娠日数'] != null && r['妊娠日数'] !== '' ? (isNaN(r['妊娠日数']) ? cellStr(r['妊娠日数']) : Number(r['妊娠日数'])) : null,
+        litter_size: r['産仔数'] != null && r['産仔数'] !== '' ? (isNaN(r['産仔数']) ? cellStr(r['産仔数']) : Number(r['産仔数'])) : null,
+        rnalater: cellStr(r['RNALater箱']),
+        note: cellStr(r['備考'])
+      };
+    });
+  }
+
+  return { individuals: inds, crosses: crosses };
+}
+
+document.getElementById('dataFileInput').addEventListener('change', function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onerror = function() {
+    setDataStatus('⚠️ 「' + file.name + '」の読み込みに失敗しました。', true);
+  };
+  reader.onload = function() {
+    try {
+      var workbook = XLSX.read(reader.result, { type: 'array' });
+      var data = excelWorkbookToData(workbook);
+      initWithData(data);
+      document.getElementById('loadError').style.display = 'none';
+      setDataStatus('✅ 「' + file.name + '」を読み込みました(' + individuals.length + '件)。');
+    } catch (err) {
+      setDataStatus('⚠️ 「' + file.name + '」の解析に失敗しました: ' + err.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+});
+</script>
+
+</body>
+</html>

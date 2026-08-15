@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>🐭 マウス系図ツール — 使い方ガイド</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card-bg: #ffffff;
+    --border: #dde1e6;
+    --text: #1f2430;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-bg: #eaf1ff;
+    --female: #d6336c;
+    --male: #1c7ed6;
+    --warn-bg: #fff4e5;
+    --warn-border: #f0b429;
+    --tag-bg: #eef0f3;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Hiragino Sans", "Meiryo", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 24px;
+    line-height: 1.7;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 24px; margin: 8px 0 4px; }
+  h2 { font-size: 18px; margin: 36px 0 12px; padding-bottom: 8px; border-bottom: 2px solid var(--border); }
+  h3 { font-size: 15px; margin: 20px 0 8px; color: var(--accent); }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 8px; }
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin: 16px 0;
+  }
+  .files-table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 10px 0; }
+  .files-table th, .files-table td { border: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  .files-table th { background: var(--tag-bg); font-size: 12px; color: var(--muted); }
+  code, .mono {
+    font-family: "Consolas", monospace;
+    background: var(--tag-bg);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 0.92em;
+  }
+  .btn-sample {
+    display: inline-block;
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .btn-sample.secondary { border-color: var(--border); background: var(--tag-bg); color: var(--text); }
+  .tag-sample {
+    display: inline-block;
+    font-size: 11px;
+    background: var(--tag-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 9px;
+    color: var(--muted);
+  }
+  .status-tag-sample {
+    display: inline-block;
+    font-size: 11px;
+    background: #fff7e6;
+    border: 1px solid #ffd97a;
+    color: #8a5a00;
+    padding: 2px 8px;
+    border-radius: 6px;
+  }
+  .status-tag-sample.uncertain { background: #ffe8e8; border-color: #ffaeae; color: #a30000; }
+  .sex-f { display:inline-block; width:16px; height:16px; border-radius:50%; background:var(--female); color:#fff; text-align:center; font-size:10px; line-height:16px; }
+  .sex-m { display:inline-block; width:16px; height:16px; border-radius:50%; background:var(--male); color:#fff; text-align:center; font-size:10px; line-height:16px; }
+  .step {
+    display: flex;
+    gap: 12px;
+    margin: 14px 0;
+    align-items: flex-start;
+  }
+  .step-num {
+    flex-shrink: 0;
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    text-align: center;
+    line-height: 26px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13.5px;
+    margin: 12px 0;
+  }
+  .field-example {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 13px;
+    margin: 4px 0;
+  }
+  .toc { font-size: 14px; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .back-link { font-size: 13px; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 30px 0; }
+</style>
+</head>
+<body>
+
+<h1>🐭 マウス系図・サンプル検索ツール — 使い方ガイド</h1>
+<div class="subtitle">個体マスターExcelを、検索・系図可視化専用のWebツールで表示するための説明書です。</div>
+<p class="back-link">→ <a href="./index.html">ツール本体(index.html)を開く</a></p>
+
+<div class="panel toc">
+  <b>目次</b>
+  <ol>
+    <li><a href="#files">同梱ファイルの内容</a></li>
+    <li><a href="#concept">全体の考え方</a></li>
+    <li><a href="#excel">Excelに個体を追加・修正する</a></li>
+    <li><a href="#load">Webツールで読み込む</a></li>
+    <li><a href="#search">個体を検索する</a></li>
+    <li><a href="#detail">詳細パネルの見方</a></li>
+    <li><a href="#mermaid">系図図の見方</a></li>
+    <li><a href="#cross">交配ペア記録一覧・ペア系図</a></li>
+    <li><a href="#limits">既知の制限・注意点</a></li>
+  </ol>
+</div>
+
+<h2 id="files">1. 同梱ファイルの内容</h2>
+<table class="files-table">
+  <tr><th>ファイル</th><th>内容</th></tr>
+  <tr><td><code>マウス系図_個体マスター.xlsx</code></td><td><b>データの正本(マスター)。</b>個体マスター/交配ペア記録の2シート構成。新しい個体の追加・修正はすべてここで行います。</td></tr>
+  <tr><td><code>index.html</code></td><td>検索・系図可視化専用のWebツール。表示専用で、データの編集機能はありません。ダブルクリックしてブラウザで開くだけで使えます(サーバー不要)。</td></tr>
+  <tr><td><code>source.pdf</code></td><td>元になった手書き記録のPDF(全5ページ)。参考資料としてフォルダ内に残していますが、ツールからは直接リンクしていません。必要な時に手動で開いてください。</td></tr>
+  <tr><td><code>使い方.html</code></td><td>このファイルです。</td></tr>
+</table>
+
+<h2 id="concept">2. 全体の考え方</h2>
+<p>データの流れはシンプルな一方向です。</p>
+<div class="note">
+  <b>マウス系図_個体マスター.xlsx</b>(データを追加・修正する) → <b>index.html</b>(読み込んで検索・系図表示するだけ)
+</div>
+<p>Webツール(<code>index.html</code>)は表示専用です。個体の追加や項目の修正はすべてExcel側で行い、Webツールでは「今のExcelの中身がどう繋がっているか」を確認します。JSONファイルのやり取りやブラウザへの保存は一切不要になりました。</p>
+
+<h2 id="excel">3. Excelに個体を追加・修正する</h2>
+<p><code>マウス系図_個体マスター.xlsx</code>を開いて直接編集します。手書きの家系図のように線を引く必要はなく、「母ID」「父ID」列に個体IDを書くだけで血統が繋がります。</p>
+<div class="step">
+  <div class="step-num">1</div>
+  <div>「個体マスター」シートの最終行の下に新しい行を追加します(表の中に追加すると書式・数式が自動で引き継がれます)。</div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div>ID・性別・母ID・父ID・産仔・出生日などを入力します。母ID/父IDのセルはドロップダウンで既存の個体IDから選べます(手入力もできますが、誤字を防げるので推奨)。「子の数」列は数式で自動計算されるので入力不要です。</div>
+</div>
+<div class="step">
+  <div class="step-num">3</div>
+  <div>存在しないIDを母/父に入力すると、そのセルが赤くハイライトされます(参照切れの早期発見用)。</div>
+</div>
+<p>「状態」列には <code>凍結</code> / <code>安楽死</code> / <code>Te/Ce まとめて回収</code> などをカンマ区切りで自由に追記できます。<code>要確認(◯◯)</code> は元の手書きPDFで判読できず特定できなかった項目に付けたタグなので、原本を見て判明したら書き換えてください。</p>
+
+<h2 id="load">4. Webツールで読み込む</h2>
+<div class="step">
+  <div class="step-num">1</div>
+  <div><code>index.html</code>を開きます。</div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div>画面上部の <span class="btn-sample">Excelファイルを選択して読み込む</span> ボタンを押し、<code>マウス系図_個体マスター.xlsx</code>を選びます。</div>
+</div>
+<div class="step">
+  <div class="step-num">3</div>
+  <div>その場でブラウザ内で解析され、すぐに検索・系図が使えるようになります(ファイル変換やアップロードは発生しません)。</div>
+</div>
+<p>Excelを修正した後は、もう一度同じボタンで選び直すだけで最新の内容に更新されます。</p>
+
+<h2 id="search">5. 個体を検索する</h2>
+<div class="step">
+  <div class="step-num">1</div>
+  <div>検索ボックスの左にあるプルダウンで、検索対象のフィールドを選べます(個体ID / 母ID / 父ID / 産仔 / RNALater保管場所 / チューブ番号 / 系統メモ / 状態 / 備考)。既定は「個体ID」です。</div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div>右側のボックスにキーワードを入力すると、選んだフィールドの中で絞り込まれます。例えば「母ID」を選んで <code>S375</code> と入力すると、S375を母に持つ個体だけが一覧されます。</div>
+</div>
+<div class="step">
+  <div class="step-num">3</div>
+  <div>下にスクロールした「全個体一覧」の表から行をクリックしても、その個体の詳細に移動できます。</div>
+</div>
+<div class="step">
+  <div class="step-num">4</div>
+  <div>検索ボックスの下にあるフィルタ(<span class="tag-sample">RNALaterあり</span> <span class="tag-sample">凍結あり</span> <span class="tag-sample">要確認</span> <span class="tag-sample">産仔日不明</span>)をクリックすると、その条件に絞り込めます。もう一度クリックで解除。</div>
+</div>
+<p><b>要確認フィルタ</b>は、Excel側で「要確認」タグが付いている個体をまとめて表示します。原本を見ながらExcelを直すべき箇所を見つけるのに使えます。</p>
+
+<h2 id="detail">6. 詳細パネルの見方</h2>
+<p>個体を選ぶと右側に表示される内容です。</p>
+<ul>
+  <li><b>母 (dam) / 父 (sire)</b> — クリックするとその親の詳細にジャンプします。</li>
+  <li><b>RNALater保管場所 / チューブ番号</b> — 青枠で強調表示。サンプルの実際の保管場所です。</li>
+  <li>祖先・子孫のたどり方は文字リストではなく、下の「系図図」で確認します。</li>
+</ul>
+<div class="field-example"><span class="sex-f">♀</span> はメス、<span class="sex-m">♂</span> はオス、<span class="tag-sample" style="background:#eee;">?</span> は性別不明を表します。</div>
+
+<h2 id="mermaid">7. 系図図の見方</h2>
+<div class="step">
+  <div class="step-num">1</div>
+  <div>詳細パネル下部の「系図図」🐭に、選んだ個体を中心とした系図が自動で描かれます。ピンク=メス、水色=オス、太枠=選択中の個体です。親同士は水平線でつながり、その中央から1本の線で子へ降ります。</div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div>「祖先 世代数」「子孫 世代数」の数値を変えると、<b>入力するだけで自動的に再描画</b>されます(ボタンを押す必要はありません)。最大100世代まで指定できます。</div>
+</div>
+<div class="step">
+  <div class="step-num">3</div>
+  <div>図が大きくてはみ出す場合は、<b>図の上でクリックしたままドラッグ</b>すると好きな方向にスクロールできます(スクロールバーを探す必要はありません)。</div>
+</div>
+<div class="step">
+  <div class="step-num">4</div>
+  <div>図中のノード(個体の四角)を<b>クリック</b>すると、①その個体を中心に画面が切り替わり、②その個体の情報がタブ区切りテキストとしてクリップボードにコピーされます(Excelにそのまま貼り付け可能)。画面下に「📋 コピーしました」と表示されれば成功です。</div>
+</div>
+<div class="step">
+  <div class="step-num">5</div>
+  <div>親も子も記録が見つからない個体は、赤枠の「孤立ノード」として単独表示されます。系図が繋がっていないことが一目でわかります。</div>
+</div>
+<p>ページ下方の「全体系図」パネルの「全体を描画する」ボタンで、全個体を1枚の図として表示することもできます(個体数が多いため描画に数秒かかります。こちらもドラッグでのスクロール・ノードクリックに対応しています)。</p>
+
+<h2 id="cross">8. 交配ペア記録一覧・ペア系図</h2>
+<p>「全個体一覧」の上に「交配ペア記録一覧」があります。Excelの「交配ペア記録」シートの内容(母ID・父ID・出産日・妊娠日数・産仔数・RNALater箱・備考)がそのまま一覧表示されます。</p>
+<div class="step">
+  <div class="step-num">1</div>
+  <div>行をクリックすると、画面上部の「系図図」がその母×父のペアを中心にした図に切り替わります。母と父が横並びで表示され、二人の間に生まれた子がその下に並びます。</div>
+</div>
+<div class="step">
+  <div class="step-num">2</div>
+  <div>ペア表示中は「祖先/子孫 世代数」の入力欄は隠れます(このペアだけを見るための特別な表示のため)。別の個体を検索・選択すると通常の系図表示に戻ります。</div>
+</div>
+
+<h2 id="limits">9. 既知の制限・注意点</h2>
+<ul>
+  <li>元PDFの解像度が低いため(1688×1191px/ページ)、一部の数字・記号の判読に誤りが含まれる可能性があります。特に <span class="status-tag-sample uncertain">要確認</span> タグが付いた項目は要確認です。</li>
+  <li>「全体系図」は個体数が多いため、環境によっては描画に時間がかかったりブラウザが重くなったりする場合があります。</li>
+  <li>クリップボードへのコピーが使えないブラウザでは、コピーに失敗することがあります(その場合はトースト通知が出ません)。</li>
+  <li>系図図の描画自体は外部ライブラリ不要ですが、Excel読み込み(SheetJS)はCDNから取得するため、インターネット接続がない環境ではExcelファイルの読み込みが動かないことがあります。</li>
+  <li>Webツールは表示専用です。ここでの操作でExcelファイルの中身が変わることはありません。</li>
+</ul>
+
+<hr>
+<p class="back-link">→ <a href="./index.html">ツール本体(index.html)に戻る</a></p>
+
+</body>
+</html>
