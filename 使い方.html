@@ -143,6 +143,7 @@
     <li><a href="#mermaid">系図図の見方</a></li>
     <li><a href="#cross">交配ペア記録一覧・ペア系図</a></li>
     <li><a href="#limits">既知の制限・注意点</a></li>
+    <li><a href="#credits">使用ライブラリ・ライセンス</a></li>
   </ol>
 </div>
 
@@ -153,6 +154,8 @@
   <tr><td><code>index.html</code></td><td>検索・系図可視化専用のWebツール。表示専用で、データの編集機能はありません。ダブルクリックしてブラウザで開くだけで使えます(サーバー不要)。</td></tr>
   <tr><td><code>source.pdf</code></td><td>元になった手書き記録のPDF(全5ページ)。参考資料としてフォルダ内に残していますが、ツールからは直接リンクしていません。必要な時に手動で開いてください。</td></tr>
   <tr><td><code>使い方.html</code></td><td>このファイルです。</td></tr>
+  <tr><td><code>xlsx.full.min.js</code></td><td>Excel読み込み用ライブラリ(SheetJS)。</td></tr>
+  <tr><td><code>madeline2.js</code> / <code>madeline2.wasm</code></td><td>系図の座標計算を行うMadeline 2.0 PDE(GPLv2)のWebAssembly版。詳細は<a href="#credits">10章</a>参照。</td></tr>
 </table>
 
 <h2 id="concept">2. 全体の考え方</h2>
@@ -260,9 +263,11 @@
   <li>元PDFの解像度が低いため(1688×1191px/ページ)、一部の数字・記号の判読に誤りが含まれる可能性があります。特に <span class="status-tag-sample uncertain">要確認</span> タグが付いた項目は要確認です。</li>
   <li>「全体系図」は個体数が多いため、環境によっては描画に時間がかかったりブラウザが重くなったりする場合があります。</li>
   <li>クリップボードへのコピーが使えないブラウザでは、コピーに失敗することがあります(その場合はトースト通知が出ません)。</li>
-  <li>系図図の描画自体は外部ライブラリ不要ですが、Excel読み込み(SheetJS)はCDNから取得するため、インターネット接続がない環境ではExcelファイルの読み込みが動かないことがあります。</li>
   <li>Webツールは表示専用です。ここでの操作でExcelファイルの中身が変わることはありません。</li>
 </ul>
+
+<h2 id="credits">10. 使用ライブラリ・ライセンス</h2>
+<p>系図の座標計算には <a href="https://github.com/piratical/Madeline_2.0_PDE" target="_blank" rel="noopener">Madeline 2.0 PDE</a> (GPLv2) をWebAssemblyにコンパイルしたものを使用しています。マウスの絵柄・線の描画は本ツール独自のコードで、Madeline側の描画機能は使っていません。ライセンス全文・改変版ソースコードへのリンクは <a href="./THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">THIRD_PARTY_NOTICES.md</a> を参照してください。Excel読み込みには <a href="https://sheetjs.com/" target="_blank" rel="noopener">SheetJS</a> を使用しています。</p>
 
 <hr>
 <p class="back-link">→ <a href="./index.html">ツール本体(index.html)に戻る</a></p>
