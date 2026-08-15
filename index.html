@@ -416,7 +416,7 @@ function renderList() {
     var rightText = field === 'id' ? (ind.rnalater ? ind.rnalater : (ind.dissection_date || '')) : searchFieldValue(ind, field);
     el.innerHTML = '<span>' + sexBadge(ind.sex) + ' <span class="id-mono">' + ind.id + '</span></span>' +
       '<span class="muted">' + rightText + '</span>';
-    el.onclick = function() { selectIndividual(ind.id); };
+    el.onclick = function() { selectIndividual(ind.id); scrollToDetail(); };
     resultList.appendChild(el);
   });
 }
@@ -424,6 +424,16 @@ searchBox.addEventListener('input', renderList);
 searchFieldSelect.addEventListener('change', renderList);
 
 // ---- detail panel ----
+
+// Jump straight to the pedigree diagram itself (not just the top of the
+// detail panel) — the panel starts with the individual's field grid, and
+// on a stacked tablet layout (.layout collapses to 1 column under 900px)
+// the diagram can otherwise still be a full field-grid's worth of
+// scrolling below wherever this lands.
+function scrollToDetail() {
+  var target = document.getElementById('mermaidSectionTitle') || document.getElementById('detailPanel');
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 function selectIndividual(id) {
   var ind = byId[id];
@@ -543,7 +553,7 @@ function mermaidGoTo(id) {
     showToast('📋 ' + id + ' の情報をコピーしました');
   }
   selectIndividual(id);
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  scrollToDetail();
 }
 
 // Click-and-drag panning for .mermaid-wrap containers (diagrams are often much
@@ -1427,7 +1437,7 @@ function showCrossMermaid(dam, sire) {
   if (title) title.textContent = '系図図 — ' + (dam || '?') + ' × ' + (sire || '?');
   if (toolbar) toolbar.style.display = 'none';
   if (container) pedRenderLayout(container, pedLayoutCross(dam, sire));
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  scrollToDetail();
 }
 
 function renderIndividualMermaid(rootId, upDepth, downDepth) {
@@ -1474,7 +1484,7 @@ function renderTable() {
       '</tr>';
   }).join('');
   browseBody.querySelectorAll('tr').forEach(function(tr) {
-    tr.onclick = function() { selectIndividual(tr.getAttribute('data-id')); window.scrollTo({top:0, behavior:'smooth'}); };
+    tr.onclick = function() { selectIndividual(tr.getAttribute('data-id')); scrollToDetail(); };
   });
 }
 document.querySelectorAll('#browseTable th').forEach(function(th) {
